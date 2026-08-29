@@ -82,4 +82,4 @@ Isso elimina a circularidade sem precisar re-simular o cronograma inteiro a cada
 
 ## Deploy
 
-Todo push para `main` dispara `.github/workflows/deploy-pages.yml`. O build recebe o caminho base do repositório e publica o conteúdo de `dist` no GitHub Pages.
+Todo push para `main` dispara `.github/workflows/deploy-pages.yml`. O build recebe o caminho base do repositório, pré-renderiza as rotas estáticas e publica o artefato em `dist/pages` no GitHub Pages.
