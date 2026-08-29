@@ -43,14 +43,18 @@ jobs:
         run: pnpm test:coverage
 
       - name: Build for GitHub Pages
-        run: pnpm build -- --base=/${{ github.event.repository.name }}/ --prerender-all
+        run: pnpm build --prerender-all
+        env:
+          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
 
       - name: Prepare static Pages artifact
+        env:
+          BASE_PATH_DIR: ${{ github.event.repository.name }}
         run: |
           rm -rf dist/pages
           mkdir -p dist/pages
           cp -r dist/server/prerendered-routes/. dist/pages/
-          cp -r dist/client/_next dist/pages/_next
+          cp -r "dist/client/${BASE_PATH_DIR}/_next" dist/pages/_next
           cp dist/client/favicon.svg dist/pages/favicon.svg
           cp dist/client/fontoura-logo.png dist/pages/fontoura-logo.png
           cp dist/client/og.png dist/pages/og.png

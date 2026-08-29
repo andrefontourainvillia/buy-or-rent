@@ -1,2 +1,6 @@
-const assetPrefix = process.env.PAGES_ASSET_PREFIX ?? '';
-export default { assetPrefix };
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH ?? '',
+};
+
+export default nextConfig;

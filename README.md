@@ -82,4 +82,4 @@ Isso elimina a circularidade sem precisar re-simular o cronograma inteiro a cada
 
 ## Deploy
 
-Todo push para `main` dispara `.github/workflows/deploy-pages.yml`. O build recebe o caminho base do repositório, pré-renderiza as rotas estáticas e publica o artefato em `dist/pages` no GitHub Pages.
+Todo push para `main` dispara `.github/workflows/deploy-pages.yml`. O build define `NEXT_PUBLIC_BASE_PATH` com o caminho do repositório (por exemplo `/buy-or-rent`), o que aplica o `assetPrefix` do `next.config.mjs` ao CSS, aos chunks JS e aos arquivos de `public/`. Em seguida, as rotas estáticas são pré-renderizadas e o artefato é montado em `dist/pages` (HTML de `dist/server/prerendered-routes`, assets de `dist/client/<repo>/_next`) e publicado no GitHub Pages.
