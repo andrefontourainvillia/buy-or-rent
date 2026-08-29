@@ -79,7 +79,10 @@ export const entryPercentFromAmount = (property: number, entry: number) => {
 
 const brDate = (iso: string, offset: number) => {
   const [year, month, day] = iso.split('-').map(Number);
-  return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1 + offset, day));
+  const targetMonth = month - 1 + offset;
+  const lastDay = new Date(Date.UTC(year, targetMonth + 1, 0)).getUTCDate();
+  const date = new Date(Date.UTC(year, targetMonth, Math.min(day, lastDay)));
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(date);
 };
 
 const isValidBrDate = (value: unknown): value is string => {
@@ -107,6 +110,23 @@ export function parseBcbTrPayload(payload: unknown): TrReference {
   }
 
   return { monthlyPercent, startDate: item.data, endDate: item.dataFim };
+}
+
+export async function fetchTrReference(
+  fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  init?: RequestInit,
+): Promise<{ source: 'bcb'; reference: TrReference } | { source: 'fallback'; reference: null }> {
+  try {
+    const response = await fetcher(TR_API_URL, init);
+    if (!response.ok) {
+      throw new Error('Não foi possível consultar a TR.');
+    }
+
+    const payload = await response.json();
+    return { source: 'bcb', reference: parseBcbTrPayload(payload) };
+  } catch {
+    return { source: 'fallback', reference: null };
+  }
 }
 
 export function calculateSchedule(inputs: FinancingInputs) {

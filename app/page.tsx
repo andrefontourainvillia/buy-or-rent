@@ -9,9 +9,9 @@ import {
   ENTRY_PERCENT_MAX,
   ENTRY_PERCENT_MIN,
   entryPercentFromAmount,
+  fetchTrReference,
   formatFinancingPeriod,
   normalizeEntryAmount,
-  parseBcbTrPayload,
   shouldApplyAutomaticTr,
   TR_API_URL,
   TR_FALLBACK,
@@ -124,22 +124,26 @@ export default function Home() {
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    fetch(TR_API_URL, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error('Não foi possível consultar a TR.');
-        return response.json();
-      })
-      .then((payload) => {
-        const reference = parseBcbTrPayload(payload);
+
+    fetchTrReference((input, init) => fetch(input, { ...init, signal: controller.signal }), { headers: { Accept: 'application/json' } })
+      .then((result) => {
         if (!active || !shouldApplyAutomaticTr(trWasEdited.current)) return;
-        setTr(reference.monthlyPercent);
-        setTrSource({ kind: 'bcb', startDate: reference.startDate, endDate: reference.endDate });
+
+        if (result.source === 'bcb' && result.reference) {
+          setTr(result.reference.monthlyPercent);
+          setTrSource({ kind: 'bcb', startDate: result.reference.startDate, endDate: result.reference.endDate });
+          return;
+        }
+
+        console.warn('Consulta da TR indisponível; usando referência local.');
+        setTrSource({ kind: 'fallback', startDate: TR_FALLBACK.startDate, endDate: TR_FALLBACK.endDate });
       })
       .catch((error) => {
         if (!active || controller.signal.aborted || !shouldApplyAutomaticTr(trWasEdited.current)) return;
         console.warn('Consulta da TR indisponível; usando referência local.', error);
         setTrSource({ kind: 'fallback', startDate: TR_FALLBACK.startDate, endDate: TR_FALLBACK.endDate });
       });
+
     return () => {
       active = false;
       controller.abort();

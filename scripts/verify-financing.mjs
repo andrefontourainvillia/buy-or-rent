@@ -3,10 +3,12 @@ import {
   calculateSchedule,
   entryFromPercent,
   entryPercentFromAmount,
+  fetchTrReference,
   formatFinancingPeriod,
   normalizeEntryAmount,
   parseBcbTrPayload,
   shouldApplyAutomaticTr,
+  TR_API_URL,
   TR_FALLBACK,
 } from '../app/financing.ts';
 
@@ -21,16 +23,56 @@ const base = {
   firstDue: '2026-09-28',
 };
 
+assert.equal(TR_API_URL, 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.226/dados/ultimos/1?formato=json');
 assert.deepEqual(parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: '0.1692' }]), {
   monthlyPercent: 0.1692,
   startDate: '27/08/2026',
   endDate: '27/09/2026',
 });
+assert.deepEqual(parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: '0.0001' }]), {
+  monthlyPercent: 0.0001,
+  startDate: '27/08/2026',
+  endDate: '27/09/2026',
+});
+assert.throws(() => parseBcbTrPayload([]));
+assert.throws(() => parseBcbTrPayload([null]));
 assert.throws(() => parseBcbTrPayload([{ data: '27/08/2026', valor: 'inválido' }]));
+assert.throws(() => parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: '-0.01' }]));
+assert.throws(() => parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: '21' }]));
 assert.throws(() => parseBcbTrPayload([{ data: '31/02/2026', dataFim: '27/09/2026', valor: '0.1692' }]));
+assert.throws(() => parseBcbTrPayload([{ data: '27/08/2026', dataFim: '31/02/2026', valor: '0.1692' }]));
+assert.throws(() => parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: 'NaN' }]));
 assert.equal(TR_FALLBACK.monthlyPercent, 0.1692);
 assert.equal(shouldApplyAutomaticTr(false), true);
 assert.equal(shouldApplyAutomaticTr(true), false);
+
+async function validFetch() {
+  return {
+    ok: true,
+    json: async () => [{ data: '27/08/2026', dataFim: '27/09/2026', valor: '0.1692' }],
+  };
+}
+
+async function invalidFetch() {
+  return { ok: false, json: async () => [] };
+}
+
+async function failingFetch() {
+  throw new Error('offline');
+}
+
+assert.deepEqual(await fetchTrReference(validFetch), {
+  source: 'bcb',
+  reference: {
+    monthlyPercent: 0.1692,
+    startDate: '27/08/2026',
+    endDate: '27/09/2026',
+  },
+});
+assert.deepEqual(await invalidFetch().then((response) => response.json()), []);
+assert.deepEqual(await fetchTrReference(invalidFetch), { source: 'fallback', reference: null });
+assert.deepEqual(await fetchTrReference(failingFetch), { source: 'fallback', reference: null });
+
 assert.equal(entryFromPercent(650000, 10), 130000);
 assert.equal(entryFromPercent(650000, 20), 130000);
 assert.equal(entryFromPercent(650000, 35.5), 230750);
@@ -50,6 +92,12 @@ assert.equal(formatFinancingPeriod(37), '3 anos e 1 mês');
 
 const belowMinimumEntry = calculateSchedule({ ...base, down: 0, trMonthlyPercent: 0 });
 assert.equal(belowMinimumEntry.entry, 130000);
+
+const endOfMonthSchedule = calculateSchedule({ ...base, months: 3, firstDue: '2026-01-31', trMonthlyPercent: 0 });
+assert.deepEqual(endOfMonthSchedule.rows.map((row) => row.due), ['31/01/2026', '28/02/2026', '31/03/2026']);
+
+const leapYearSchedule = calculateSchedule({ ...base, months: 2, firstDue: '2028-01-31', trMonthlyPercent: 0 });
+assert.equal(leapYearSchedule.rows[1].due, '29/02/2028');
 
 const withoutTr = calculateSchedule({ ...base, trMonthlyPercent: 0 });
 assert.equal(withoutTr.rows.length, 420);
