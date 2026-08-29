@@ -5,6 +5,7 @@ import {
   computeFgtsMonthlyRate,
   entryFromPercent,
   entryPercentFromAmount,
+  FGTS_AMORTIZATION_INTERVAL_MONTHS,
   FGTS_MONTHLY_YIELD_BONUS,
   fetchTrReference,
   formatFinancingPeriod,
@@ -183,5 +184,26 @@ assert.equal(fgtsEarlyPayoff.rows[23].fgtsDeposit, 1500);
 assert.ok(Math.abs(fgtsEarlyPayoff.rows.at(-1).fgtsAmortization - 28888.888888) < 0.01);
 assert.ok(fgtsEarlyPayoff.rows.at(-1).fgtsBalance >= 0);
 assert.ok(fgtsEarlyPayoff.rows.at(-1).balance <= 0.01);
+
+const noFgtsCumulative = calculateSchedule({ ...base, trMonthlyPercent: 0.1692 });
+assert.ok(noFgtsCumulative.rows.every((row) => row.cumulativeFgtsDisbursed === 0));
+assert.ok(Math.abs(noFgtsCumulative.rows.at(-1).cumulativeOwnDisbursed - (noFgtsCumulative.entry + noFgtsCumulative.totals.total)) < 0.01);
+
+const fgtsEntryPortion = clampFgtsToEntry(fgtsPartialAmortization.entry, 5000);
+const fgtsCumulative = calculateSchedule({
+  ...noFeeBase,
+  fgts: { currentBalance: 5000, monthlyYieldPercent: 0, extraordinaryAmortization: { monthlyContribution: 300, annualRaisePercent: 0 } },
+});
+assert.equal(fgtsCumulative.rows[0].cumulativeFgtsDisbursed, fgtsEntryPortion);
+fgtsCumulative.rows.forEach((row, index) => {
+  const isAmortizationMonth = (index + 1) % FGTS_AMORTIZATION_INTERVAL_MONTHS === 0;
+  assert.equal(row.fgtsAmortization > 0, isAmortizationMonth && row.n <= fgtsCumulative.term);
+});
+assert.ok(Math.abs(fgtsCumulative.rows.at(-1).cumulativeFgtsDisbursed - (fgtsEntryPortion + fgtsCumulative.totals.fgtsAmortization)) < 0.01);
+assert.ok(Math.abs(fgtsCumulative.rows.at(-1).cumulativeOwnDisbursed - (fgtsCumulative.entry - fgtsEntryPortion + fgtsCumulative.totals.total)) < 0.01);
+assert.ok(Math.abs(
+  (fgtsCumulative.rows.at(-1).cumulativeOwnDisbursed + fgtsCumulative.rows.at(-1).cumulativeFgtsDisbursed)
+  - (fgtsCumulative.entry + fgtsCumulative.totals.total + fgtsCumulative.totals.fgtsAmortization),
+) < 0.01);
 
 console.log('Financing checks passed.');

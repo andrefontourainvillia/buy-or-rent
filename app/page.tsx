@@ -62,6 +62,9 @@ const TOOLTIP_COPY = {
   fgtsDepositColumn: 'Valor depositado no FGTS no mês correspondente, considerando os reajustes anuais programados.',
   fgtsBalanceColumn: 'Saldo acumulado na conta do FGTS após o rendimento mensal e o depósito do mês, descontando amortizações extraordinárias realizadas.',
   fgtsAmortizationColumn: `Saldo de FGTS acumulado (aportes + rendimento) aplicado como amortização extraordinária a cada ${FGTS_AMORTIZATION_INTERVAL_MONTHS} meses.`,
+  ownTotalColumn: 'Soma acumulada da entrada com recursos próprios e de todos os boletos pagos até esta parcela, sem contar valores de FGTS.',
+  fgtsTotalColumn: 'Soma acumulada da entrada e das amortizações extraordinárias pagas com FGTS até esta parcela.',
+  grandTotalColumn: 'Total boletos + Total FGTS: soma de todos os valores desembolsados até esta parcela, com e sem FGTS.',
 } as const;
 
 type TrSource = { kind: 'loading' | 'bcb' | 'fallback' | 'manual'; startDate?: string; endDate?: string };
@@ -132,6 +135,7 @@ export default function Home() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showTableDetails, setShowTableDetails] = useState(false);
   const [showFgtsDetails, setShowFgtsDetails] = useState(false);
+  const [showTotals, setShowTotals] = useState(false);
   const [trSource, setTrSource] = useState<TrSource>({ kind: 'loading', startDate: TR_FALLBACK.startDate, endDate: TR_FALLBACK.endDate });
   const trWasEdited = useRef(false);
   const [fgtsEnabled, setFgtsEnabled] = useState(false);
@@ -228,7 +232,7 @@ export default function Home() {
     initialAmortization: first ? `${fmt(first.correctedBalance)} ÷ ${result.term} parcelas = ${fmt(first.amort)}.` : '',
     effectiveRate: `(1 + ${number.format(result.monthlyRate * 100)}% a.m.)¹² − 1 = ${number.format(result.effective)}% a.a.`,
     totalInterest: `Soma dos juros das ${result.term} parcelas: ${fmt(result.totals.interest)}.`,
-    totalDisbursement: `Entrada ${fmt(result.entry)} + boletos ${fmt(result.totals.total)} = ${fmt(result.totals.total + result.entry)}.`,
+    totalDisbursement: `Entrada em dinheiro ${fmt(down - fgtsEntryPortion)} + entrada via FGTS ${fmt(fgtsEntryPortion)} + boletos ${fmt(result.totals.total)} + amortização extraordinária via FGTS ${fmt(result.totals.fgtsAmortization)} = ${fmt(result.totals.total + result.entry + result.totals.fgtsAmortization)}.`,
     principal: `Valor financiado: ${fmt(result.price)} − ${fmt(result.entry)} = ${fmt(result.financed)}.`,
     totalCorrection: `Soma de todas as correções mensais pela TR: ${fmt(result.totals.correction)}.`,
     totalInsurance: `Soma de MIP e DFI em todas as parcelas: ${fmt(result.totals.insurance)}.`,
@@ -236,14 +240,15 @@ export default function Home() {
     fgtsEntry: `${fmt(fgtsEntryPortion)} do FGTS compõem a entrada de ${fmt(result.entry)}. O valor financiado continua sendo definido pela entrada total, independentemente da origem dos recursos.`,
     recalculatedTerm: `Prazo contratado: ${formatFinancingPeriodWithMonths(months)}. Com as amortizações extraordinárias do FGTS, a quitação ocorre em ${termLabel}, antecipando ${formatFinancingPeriodWithMonths(fgtsAnticipatedMonths)}.`,
     fgtsAmortizationTotal: fgtsAnticipatedMonths > 0
-      ? `Soma das amortizações extraordinárias com FGTS: ${fmt(result.totals.fgtsAmortization)}. Financiamento quitado ${fgtsAnticipatedMonths} ${fgtsAnticipatedMonths === 1 ? 'mês' : 'meses'} antes do prazo contratado.`
-      : `Soma das amortizações extraordinárias com FGTS: ${fmt(result.totals.fgtsAmortization)}.`,
-  }), [result, first, last, tr, fee, fgtsEntryPortion, fgtsAnticipatedMonths, months, termLabel, trStatus]);
+      ? `Entrada via FGTS ${fmt(fgtsEntryPortion)} + amortizações extraordinárias com FGTS ${fmt(result.totals.fgtsAmortization)} = ${fmt(fgtsEntryPortion + result.totals.fgtsAmortization)}. Financiamento quitado ${fgtsAnticipatedMonths} ${fgtsAnticipatedMonths === 1 ? 'mês' : 'meses'} antes do prazo contratado.`
+      : `Entrada via FGTS ${fmt(fgtsEntryPortion)} + amortizações extraordinárias com FGTS ${fmt(result.totals.fgtsAmortization)} = ${fmt(fgtsEntryPortion + result.totals.fgtsAmortization)}.`,
+  }), [result, first, last, tr, fee, down, fgtsEntryPortion, fgtsAnticipatedMonths, months, termLabel, trStatus]);
 
   const exportCsv = () => {
     const header = 'Parcela;Vencimento;Saldo anterior;TR (% a.m.);Correção TR;Saldo corrigido;Amortização;Juros;Prestação;MIP;DFI;Tarifa;Boleto'
       + (fgtsAmortizationActive ? ';Depósito FGTS;Saldo FGTS;Amortização FGTS' : '')
-      + ';Amortização real;Saldo devedor final';
+      + ';Amortização real;Saldo devedor final'
+      + (showTotals ? ';Total boletos' + (fgtsAmortizationActive ? ';Total FGTS' : '') + ';Total geral' : '');
     const lines = result.rows.map((row) => [
       row.n,
       row.due,
@@ -261,6 +266,7 @@ export default function Home() {
       ...(fgtsAmortizationActive ? [row.fgtsDeposit, row.fgtsBalance, row.fgtsAmortization] : []),
       row.realAmortization,
       row.balance,
+      ...(showTotals ? [row.cumulativeOwnDisbursed, ...(fgtsAmortizationActive ? [row.cumulativeFgtsDisbursed] : []), row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed] : []),
     ].map((value, index) => index < 2 ? value : Number(value).toFixed(index === 3 ? 4 : 2).replace('.', ',')).join(';'));
     const blob = new Blob(['\ufeff' + [header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
     const anchor = document.createElement('a');
@@ -325,9 +331,18 @@ export default function Home() {
           <Metric label="Amortização inicial" value={fmt(result.initialAmort)} help={resultHelp.initialAmortization} />
           <Metric label="Taxa efetiva" value={`${number.format(result.effective)}% a.a.`} help={resultHelp.effectiveRate} />
           <Metric label="Juros totais" value={fmt(result.totals.interest)} help={resultHelp.totalInterest} />
-          <Metric label="Total desembolsado" value={fmt(result.totals.total + result.entry)} help={resultHelp.totalDisbursement} />
           {hasFgtsEntryPortion && <Metric label="FGTS usado na entrada" value={fmt(fgtsEntryPortion)} help={resultHelp.fgtsEntry} />}
           {hasRecalculatedTerm && <Metric label="Novo prazo" value={termLabel} help={resultHelp.recalculatedTerm} />}
+        </div>
+        <div className="totals-breakdown">
+          <HelpLabel label="Total desembolsado" help={resultHelp.totalDisbursement} />
+          <strong>{fmt(result.totals.total + result.entry + result.totals.fgtsAmortization)}</strong>
+          <ul>
+            <li><span>Entrada em dinheiro</span><b>{fmt(down - fgtsEntryPortion)}</b></li>
+            {hasFgtsEntryPortion && <li><span>Entrada via FGTS</span><b>{fmt(fgtsEntryPortion)}</b></li>}
+            <li><span>Boletos</span><b>{fmt(result.totals.total)}</b></li>
+            {fgtsAmortizationActive && <li><span>Amortização extraordinária via FGTS</span><b>{fmt(result.totals.fgtsAmortization)}</b></li>}
+          </ul>
         </div>
         <div className="legend"><span><i className="orange" />Boleto</span><span><i className="blue" />Saldo devedor</span></div><EvolutionChart rows={result.rows} termLabel={termLabel} />
       </div>
@@ -341,7 +356,7 @@ export default function Home() {
         <Metric label="Juros" value={fmt(result.totals.interest)} help={resultHelp.totalInterest} />
         <Metric label="Seguros" value={fmt(result.totals.insurance)} help={resultHelp.totalInsurance} />
         <Metric label="Tarifas" value={fmt(result.totals.fees)} help={resultHelp.totalFees} />
-        {fgtsAmortizationActive && <Metric label="Amortizado via FGTS" value={fmt(result.totals.fgtsAmortization)} help={resultHelp.fgtsAmortizationTotal} />}
+        {fgtsAmortizationActive && <Metric label="Amortizado via FGTS" value={fmt(fgtsEntryPortion + result.totals.fgtsAmortization)} help={resultHelp.fgtsAmortizationTotal} />}
       </div>
       <div className="table-card">
         <div className="table-toolbar">
@@ -365,6 +380,13 @@ export default function Home() {
               aria-expanded={showTableDetails}
             >
               {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
+            </button>
+            <button
+              className="detail-toggle"
+              onClick={() => setShowTotals((visible) => !visible)}
+              aria-expanded={showTotals}
+            >
+              {showTotals ? 'Ocultar totalizadores' : 'Exibir totalizadores'}
             </button>
           </div>
         </div>
@@ -390,6 +412,9 @@ export default function Home() {
           </>}
           <TableHead label="Amortização real" help={TOOLTIP_COPY.realAmortization} />
           <TableHead label="Saldo devedor" help={TOOLTIP_COPY.endingBalance} />
+          {showTotals && <TableHead label="Total boletos" help={TOOLTIP_COPY.ownTotalColumn} />}
+          {showTotals && fgtsAmortizationActive && <TableHead label="Total FGTS" help={TOOLTIP_COPY.fgtsTotalColumn} />}
+          {showTotals && <TableHead label="Total geral" help={TOOLTIP_COPY.grandTotalColumn} />}
         </tr></thead><tbody>{result.rows.map((row) => <tr key={row.n}>
           <td><span className="installment-number"><span>{row.n}</span><InfoTooltip content={formatFinancingPeriod(row.n)} /></span></td><td>{row.due}</td>
           {showTableDetails && <><td>{fmt(row.openingBalance)}</td><td>{fmt(row.correction)}</td><td>{fmt(row.correctedBalance)}</td><td>{fmt(row.amort)}</td><td>{fmt(row.interest)}</td><td>{fmt(row.payment)}</td><td>{fmt(row.mip)}</td><td>{fmt(row.dfi)}</td><td>{fmt(row.fee)}</td></>}
@@ -400,6 +425,9 @@ export default function Home() {
             <td>{fmt(row.fgtsAmortization)}</td>
           </>}
           <td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
+          {showTotals && <td>{fmt(row.cumulativeOwnDisbursed)}</td>}
+          {showTotals && fgtsAmortizationActive && <td>{fmt(row.cumulativeFgtsDisbursed)}</td>}
+          {showTotals && <td><b>{fmt(row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed)}</b></td>}
         </tr>)}</tbody></table></div>
       </div>
       <div className="disclaimer"><b>Importante</b><p>Esta é uma simulação matemática independente, inspirada na estrutura do demonstrativo da CAIXA. Não representa proposta de crédito. TR, seguros, CET, tarifas, datas e valores reais dependem das condições contratuais e da análise do banco.</p></div>

@@ -36,6 +36,8 @@ export type ScheduleRow = {
   fgtsDeposit: number;
   fgtsBalance: number;
   fgtsAmortization: number;
+  cumulativeOwnDisbursed: number;
+  cumulativeFgtsDisbursed: number;
 };
 
 export type FgtsExtraordinaryAmortization = {
@@ -168,8 +170,11 @@ export function calculateSchedule(inputs: FinancingInputs) {
   const trMonthly = Math.max(0, inputs.trMonthlyPercent) / 100;
   const fgtsAmortizationPlan = inputs.fgts?.extraordinaryAmortization;
   const fgtsYieldMonthly = Math.max(0, inputs.fgts?.monthlyYieldPercent ?? 0) / 100;
+  const fgtsEntryPortion = inputs.fgts ? clampFgtsToEntry(entry, inputs.fgts.currentBalance) : 0;
   let balance = financed;
   let fgtsAccrued = 0;
+  let cumulativeOwnDisbursed = entry - fgtsEntryPortion;
+  let cumulativeFgtsDisbursed = fgtsEntryPortion;
   const rows: ScheduleRow[] = [];
 
   for (let i = 1; i <= term; i += 1) {
@@ -202,6 +207,8 @@ export function calculateSchedule(inputs: FinancingInputs) {
     const total = payment + mip + dfi + fee;
     balance = Math.max(0, correctedBalance - amort);
     const realAmortization = openingBalance - balance;
+    cumulativeOwnDisbursed += total;
+    cumulativeFgtsDisbursed += fgtsAmortization;
     rows.push({
       n: i,
       due: brDate(inputs.firstDue, i - 1),
@@ -220,6 +227,8 @@ export function calculateSchedule(inputs: FinancingInputs) {
       fgtsDeposit,
       fgtsBalance: fgtsAccrued,
       fgtsAmortization,
+      cumulativeOwnDisbursed,
+      cumulativeFgtsDisbursed,
     });
 
     if (balance <= 0) break;
