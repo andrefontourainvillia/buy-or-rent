@@ -5,12 +5,16 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import {
   calculateSchedule,
+  clampFgtsToEntry,
+  computeFgtsMonthlyRate,
   entryFromPercent,
   ENTRY_PERCENT_MAX,
   ENTRY_PERCENT_MIN,
   entryPercentFromAmount,
   fetchTrReference,
+  FGTS_AMORTIZATION_INTERVAL_MONTHS,
   formatFinancingPeriod,
+  formatFinancingPeriodWithMonths,
   normalizeEntryAmount,
   shouldApplyAutomaticTr,
   TR_API_URL,
@@ -49,11 +53,20 @@ const TOOLTIP_COPY = {
   boleto: 'Prestação + MIP + DFI + tarifa administrativa.',
   realAmortization: 'Saldo anterior − saldo devedor final. Mostra a redução líquida da dívida após a correção pela TR; um valor negativo indica aumento do saldo no mês.',
   endingBalance: 'Saldo corrigido − amortização. Este valor inicia o cálculo do mês seguinte.',
+  fgtsEnable: 'Usa o saldo atual do FGTS para compor a entrada informada acima, sem alterar o valor total da entrada.',
+  fgtsBalance: 'Saldo disponível do FGTS hoje. É abatido da entrada informada, reduzindo o valor pago com recursos próprios.',
+  fgtsYield: `Rendimento legal do FGTS: TR do período + 3% a.a. (0,25% a.m. linear). Calculado a partir da TR informada, mas pode ser editado manualmente.`,
+  fgtsAmortizationEnable: `Usa o saldo acumulado de FGTS (aportes mensais + rendimento) para abater o saldo devedor a cada ${FGTS_AMORTIZATION_INTERVAL_MONTHS} meses.`,
+  fgtsContribution: 'Valor mensal depositado no FGTS (tende a acompanhar 8% do salário). Some mês a mês até a próxima amortização extraordinária.',
+  fgtsRaise: 'Reajuste anual aplicado ao aporte mensal, simulando aumentos salariais futuros.',
+  fgtsDepositColumn: 'Valor depositado no FGTS no mês correspondente, considerando os reajustes anuais programados.',
+  fgtsBalanceColumn: 'Saldo acumulado na conta do FGTS após o rendimento mensal e o depósito do mês, descontando amortizações extraordinárias realizadas.',
+  fgtsAmortizationColumn: `Saldo de FGTS acumulado (aportes + rendimento) aplicado como amortização extraordinária a cada ${FGTS_AMORTIZATION_INTERVAL_MONTHS} meses.`,
 } as const;
 
 type TrSource = { kind: 'loading' | 'bcb' | 'fallback' | 'manual'; startDate?: string; endDate?: string };
 
-function EvolutionChart({ rows }: { rows: ScheduleRow[] }) {
+function EvolutionChart({ rows, termLabel }: { rows: ScheduleRow[]; termLabel: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -99,9 +112,9 @@ function EvolutionChart({ rows }: { rows: ScheduleRow[] }) {
     context.font = '11px Arial';
     context.fillText('início', padding.left, height - 8);
     context.textAlign = 'right';
-    context.fillText(`${rows.length} meses`, width - padding.right, height - 8);
+    context.fillText(termLabel, width - padding.right, height - 8);
     context.textAlign = 'left';
-  }, [rows]);
+  }, [rows, termLabel]);
 
   return <canvas ref={ref} className="chart" aria-label="Gráfico da queda do boleto e do saldo devedor ao longo do prazo" />;
 }
@@ -118,8 +131,15 @@ export default function Home() {
   const [firstDue, setFirstDue] = useState('2026-09-28');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showTableDetails, setShowTableDetails] = useState(false);
+  const [showFgtsDetails, setShowFgtsDetails] = useState(false);
   const [trSource, setTrSource] = useState<TrSource>({ kind: 'loading', startDate: TR_FALLBACK.startDate, endDate: TR_FALLBACK.endDate });
   const trWasEdited = useRef(false);
+  const [fgtsEnabled, setFgtsEnabled] = useState(false);
+  const [fgtsBalance, setFgtsBalance] = useState(0);
+  const [fgtsYieldOverride, setFgtsYieldOverride] = useState<number | null>(null);
+  const [fgtsAmortizationEnabled, setFgtsAmortizationEnabled] = useState(false);
+  const [fgtsContribution, setFgtsContribution] = useState(300);
+  const [fgtsRaise, setFgtsRaise] = useState(5);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -156,6 +176,10 @@ export default function Home() {
     setTrSource({ kind: 'manual' });
   };
 
+  const fgtsYield = fgtsYieldOverride ?? computeFgtsMonthlyRate(tr);
+  const fgtsAmortizationActive = fgtsEnabled && fgtsAmortizationEnabled;
+  const updateFgtsYield = (value: number) => setFgtsYieldOverride(value);
+
   const downPercent = entryPercentFromAmount(property, down);
   const minimumDown = entryFromPercent(property, ENTRY_PERCENT_MIN);
   const updateProperty = (value: number) => {
@@ -175,9 +199,19 @@ export default function Home() {
     dfiMonthlyPercent: dfiRate,
     monthlyFee: fee,
     firstDue,
-  }), [property, down, months, rate, tr, mipRate, dfiRate, fee, firstDue]);
+    fgts: fgtsEnabled ? {
+      currentBalance: fgtsBalance,
+      monthlyYieldPercent: fgtsYield,
+      extraordinaryAmortization: fgtsAmortizationActive ? { monthlyContribution: fgtsContribution, annualRaisePercent: fgtsRaise } : undefined,
+    } : undefined,
+  }), [property, down, months, rate, tr, mipRate, dfiRate, fee, firstDue, fgtsEnabled, fgtsBalance, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise]);
   const first = result.rows[0];
   const last = result.rows.at(-1);
+  const fgtsEntryPortion = fgtsEnabled ? clampFgtsToEntry(result.entry, fgtsBalance) : 0;
+  const fgtsAnticipatedMonths = fgtsAmortizationActive ? months - result.term : 0;
+  const hasFgtsEntryPortion = fgtsEntryPortion > 0;
+  const hasRecalculatedTerm = fgtsAnticipatedMonths > 0;
+  const termLabel = formatFinancingPeriodWithMonths(result.term);
   const trStatus = trSource.kind === 'bcb'
     ? `Banco Central • ${trSource.startDate} a ${trSource.endDate}`
     : trSource.kind === 'manual'
@@ -188,7 +222,7 @@ export default function Home() {
 
   const resultHelp = useMemo(() => ({
     financed: `${fmt(result.price)} − ${fmt(result.entry)} = ${fmt(result.financed)}.`,
-    activeTr: `${fmt(first?.openingBalance || 0)} × ${trNumber.format(tr)}% = ${fmt(first?.correction || 0)} de correção na primeira parcela.`,
+    activeTr: `${trStatus}. ${fmt(first?.openingBalance || 0)} × ${trNumber.format(tr)}% = ${fmt(first?.correction || 0)} de correção na primeira parcela. A taxa mensal ativa é repetida nos meses futuros apenas como projeção.`,
     firstBoleto: first ? `Prestação ${fmt(first.payment)} + MIP ${fmt(first.mip)} + DFI ${fmt(first.dfi)} + tarifa ${fmt(first.fee)} = ${fmt(first.total)}.` : '',
     lastBoleto: last ? `Prestação ${fmt(last.payment)} + MIP ${fmt(last.mip)} + DFI ${fmt(last.dfi)} + tarifa ${fmt(last.fee)} = ${fmt(last.total)}.` : '',
     initialAmortization: first ? `${fmt(first.correctedBalance)} ÷ ${result.term} parcelas = ${fmt(first.amort)}.` : '',
@@ -199,10 +233,17 @@ export default function Home() {
     totalCorrection: `Soma de todas as correções mensais pela TR: ${fmt(result.totals.correction)}.`,
     totalInsurance: `Soma de MIP e DFI em todas as parcelas: ${fmt(result.totals.insurance)}.`,
     totalFees: `${result.term} parcelas × ${fmt(fee)} = ${fmt(result.totals.fees)}.`,
-  }), [result, first, last, tr, fee]);
+    fgtsEntry: `${fmt(fgtsEntryPortion)} do FGTS compõem a entrada de ${fmt(result.entry)}. O valor financiado continua sendo definido pela entrada total, independentemente da origem dos recursos.`,
+    recalculatedTerm: `Prazo contratado: ${formatFinancingPeriodWithMonths(months)}. Com as amortizações extraordinárias do FGTS, a quitação ocorre em ${termLabel}, antecipando ${formatFinancingPeriodWithMonths(fgtsAnticipatedMonths)}.`,
+    fgtsAmortizationTotal: fgtsAnticipatedMonths > 0
+      ? `Soma das amortizações extraordinárias com FGTS: ${fmt(result.totals.fgtsAmortization)}. Financiamento quitado ${fgtsAnticipatedMonths} ${fgtsAnticipatedMonths === 1 ? 'mês' : 'meses'} antes do prazo contratado.`
+      : `Soma das amortizações extraordinárias com FGTS: ${fmt(result.totals.fgtsAmortization)}.`,
+  }), [result, first, last, tr, fee, fgtsEntryPortion, fgtsAnticipatedMonths, months, termLabel, trStatus]);
 
   const exportCsv = () => {
-    const header = 'Parcela;Vencimento;Saldo anterior;TR (% a.m.);Correção TR;Saldo corrigido;Amortização;Juros;Prestação;MIP;DFI;Tarifa;Boleto;Amortização real;Saldo devedor final';
+    const header = 'Parcela;Vencimento;Saldo anterior;TR (% a.m.);Correção TR;Saldo corrigido;Amortização;Juros;Prestação;MIP;DFI;Tarifa;Boleto'
+      + (fgtsAmortizationActive ? ';Depósito FGTS;Saldo FGTS;Amortização FGTS' : '')
+      + ';Amortização real;Saldo devedor final';
     const lines = result.rows.map((row) => [
       row.n,
       row.due,
@@ -217,6 +258,7 @@ export default function Home() {
       row.dfi,
       row.fee,
       row.total,
+      ...(fgtsAmortizationActive ? [row.fgtsDeposit, row.fgtsBalance, row.fgtsAmortization] : []),
       row.realAmortization,
       row.balance,
     ].map((value, index) => index < 2 ? value : Number(value).toFixed(index === 3 ? 4 : 2).replace('.', ',')).join(';'));
@@ -240,6 +282,21 @@ export default function Home() {
           <MoneyControl label="Valor da entrada" help={TOOLTIP_COPY.down} value={down} min={minimumDown} max={property} step={0.01} sliderStep={1000} helper={`Mínimo: ${fmt(minimumDown)} (20%)`} onChange={updateDown} />
           <PercentControl label="Percentual de entrada" help={TOOLTIP_COPY.downPercent} value={Number(downPercent.toFixed(4))} min={ENTRY_PERCENT_MIN} max={ENTRY_PERCENT_MAX} step={0.1} helper="Mínimo permitido: 20%" onChange={updateDownPercent} />
         </div>
+        <div className="fgts-panel">
+          <label className="fgts-toggle"><input type="checkbox" checked={fgtsEnabled} onChange={(event) => setFgtsEnabled(event.target.checked)} /><span>Incluir FGTS na entrada</span><InfoTooltip content={TOOLTIP_COPY.fgtsEnable} /></label>
+          {fgtsEnabled && <div className="fgts-fields">
+            <div className="field-grid two">
+              <MoneyControl label="Saldo atual do FGTS" help={TOOLTIP_COPY.fgtsBalance} value={fgtsBalance} min={0} max={Math.max(down, 1)} step={0.01} sliderStep={1000} onChange={setFgtsBalance} />
+              <Field label="Rendimento do FGTS (% a.m.)" help={TOOLTIP_COPY.fgtsYield} value={fgtsYield} min={0} max={20} step={0.0001} onChange={updateFgtsYield} />
+            </div>
+            <small>Da entrada de {fmt(down)}, {fmt(fgtsEntryPortion)} vêm do FGTS e {fmt(down - fgtsEntryPortion)} de recursos próprios.</small>
+            <label className="fgts-toggle"><input type="checkbox" checked={fgtsAmortizationEnabled} onChange={(event) => setFgtsAmortizationEnabled(event.target.checked)} /><span>Usar FGTS para amortizações extraordinárias a cada {FGTS_AMORTIZATION_INTERVAL_MONTHS} meses</span><InfoTooltip content={TOOLTIP_COPY.fgtsAmortizationEnable} /></label>
+            {fgtsAmortizationEnabled && <div className="field-grid two">
+              <MoneyControl label="Aporte mensal de FGTS" help={TOOLTIP_COPY.fgtsContribution} value={fgtsContribution} min={0} max={10000} step={0.01} sliderStep={10} onChange={setFgtsContribution} />
+              <PercentControl label="Reajuste anual do aporte" help={TOOLTIP_COPY.fgtsRaise} value={fgtsRaise} min={0} max={50} step={0.1} onChange={setFgtsRaise} />
+            </div>}
+          </div>}
+        </div>
         <div className="field-grid three">
           <Field label="Prazo (meses)" help={TOOLTIP_COPY.months} value={months} min={12} max={420} step={1} onChange={setMonths} />
           <Field label="Juros nominal (% a.a.)" help={TOOLTIP_COPY.annualRate} value={rate} min={0} max={30} step={0.01} onChange={setRate} />
@@ -261,16 +318,18 @@ export default function Home() {
       <div className="summary card dark-card">
         <div className="section-title light"><span>02</span><div><h2>Seu resultado</h2><p>Estimativa pelo sistema SAC com saldo corrigido pela TR.</p></div></div>
         <div className="primary-result"><HelpLabel label="Valor financiado" help={resultHelp.financed} /><strong>{fmt(result.financed)}</strong><small>{number.format(result.price ? result.financed / result.price * 100 : 0)}% do imóvel</small></div>
-        <div className={`tr-status ${trSource.kind}`}><HelpLabel label="TR projetada" help={resultHelp.activeTr} /><b>{trNumber.format(tr)}% a.m.</b><small>{trStatus}</small></div>
         <div className="metrics">
+          <Metric label="TR projetada" value={`${trNumber.format(tr)}% a.m.`} help={resultHelp.activeTr} />
           <Metric label="1º boleto" value={fmt(first?.total || 0)} help={resultHelp.firstBoleto} />
           <Metric label="Último boleto" value={fmt(last?.total || 0)} help={resultHelp.lastBoleto} />
           <Metric label="Amortização inicial" value={fmt(result.initialAmort)} help={resultHelp.initialAmortization} />
           <Metric label="Taxa efetiva" value={`${number.format(result.effective)}% a.a.`} help={resultHelp.effectiveRate} />
           <Metric label="Juros totais" value={fmt(result.totals.interest)} help={resultHelp.totalInterest} />
           <Metric label="Total desembolsado" value={fmt(result.totals.total + result.entry)} help={resultHelp.totalDisbursement} />
+          {hasFgtsEntryPortion && <Metric label="FGTS usado na entrada" value={fmt(fgtsEntryPortion)} help={resultHelp.fgtsEntry} />}
+          {hasRecalculatedTerm && <Metric label="Novo prazo" value={termLabel} help={resultHelp.recalculatedTerm} />}
         </div>
-        <div className="legend"><span><i className="orange" />Boleto</span><span><i className="blue" />Saldo devedor</span></div><EvolutionChart rows={result.rows} />
+        <div className="legend"><span><i className="orange" />Boleto</span><span><i className="blue" />Saldo devedor</span></div><EvolutionChart rows={result.rows} termLabel={termLabel} />
       </div>
     </section>
 
@@ -282,8 +341,33 @@ export default function Home() {
         <Metric label="Juros" value={fmt(result.totals.interest)} help={resultHelp.totalInterest} />
         <Metric label="Seguros" value={fmt(result.totals.insurance)} help={resultHelp.totalInsurance} />
         <Metric label="Tarifas" value={fmt(result.totals.fees)} help={resultHelp.totalFees} />
+        {fgtsAmortizationActive && <Metric label="Amortizado via FGTS" value={fmt(result.totals.fgtsAmortization)} help={resultHelp.fgtsAmortizationTotal} />}
       </div>
-      <div className="table-card"><div className="table-toolbar"><div><strong>{result.term} parcelas exibidas</strong><span>Use os ícones de informação para entender cada cálculo.</span></div><button className="detail-toggle" onClick={() => setShowTableDetails((visible) => !visible)} aria-expanded={showTableDetails}>{showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}</button></div>
+      <div className="table-card">
+        <div className="table-toolbar">
+          <div>
+            <strong>{result.term} parcelas exibidas</strong>
+            <span>Use os ícones de informação para entender cada cálculo.</span>
+          </div>
+          <div className="table-actions">
+            {fgtsAmortizationActive && (
+              <button
+                className="detail-toggle"
+                onClick={() => setShowFgtsDetails((visible) => !visible)}
+                aria-expanded={showFgtsDetails}
+              >
+                {showFgtsDetails ? 'Ocultar detalhes do FGTS' : 'Exibir detalhes do FGTS'}
+              </button>
+            )}
+            <button
+              className="detail-toggle"
+              onClick={() => setShowTableDetails((visible) => !visible)}
+              aria-expanded={showTableDetails}
+            >
+              {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
+            </button>
+          </div>
+        </div>
         <div className="table-scroll"><table className={showTableDetails ? 'is-detailed' : ''}><thead><tr>
           <TableHead label="Nº" help={TOOLTIP_COPY.installmentNumber} />
           <TableHead label="Vencimento" help={TOOLTIP_COPY.dueDate} />
@@ -299,12 +383,23 @@ export default function Home() {
             <TableHead label="Tarifa" help={TOOLTIP_COPY.monthlyFee} />
           </>}
           <TableHead label="Boleto" help={TOOLTIP_COPY.boleto} />
+          {fgtsAmortizationActive && showFgtsDetails && <>
+            <TableHead label="Depósito FGTS" help={TOOLTIP_COPY.fgtsDepositColumn} />
+            <TableHead label="Saldo FGTS" help={TOOLTIP_COPY.fgtsBalanceColumn} />
+            <TableHead label="Amortização FGTS" help={TOOLTIP_COPY.fgtsAmortizationColumn} />
+          </>}
           <TableHead label="Amortização real" help={TOOLTIP_COPY.realAmortization} />
           <TableHead label="Saldo devedor" help={TOOLTIP_COPY.endingBalance} />
         </tr></thead><tbody>{result.rows.map((row) => <tr key={row.n}>
           <td><span className="installment-number"><span>{row.n}</span><InfoTooltip content={formatFinancingPeriod(row.n)} /></span></td><td>{row.due}</td>
           {showTableDetails && <><td>{fmt(row.openingBalance)}</td><td>{fmt(row.correction)}</td><td>{fmt(row.correctedBalance)}</td><td>{fmt(row.amort)}</td><td>{fmt(row.interest)}</td><td>{fmt(row.payment)}</td><td>{fmt(row.mip)}</td><td>{fmt(row.dfi)}</td><td>{fmt(row.fee)}</td></>}
-          <td><b>{fmt(row.total)}</b></td><td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
+          <td><b>{fmt(row.total)}</b></td>
+          {fgtsAmortizationActive && showFgtsDetails && <>
+            <td>{fmt(row.fgtsDeposit)}</td>
+            <td>{fmt(row.fgtsBalance)}</td>
+            <td>{fmt(row.fgtsAmortization)}</td>
+          </>}
+          <td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
         </tr>)}</tbody></table></div>
       </div>
       <div className="disclaimer"><b>Importante</b><p>Esta é uma simulação matemática independente, inspirada na estrutura do demonstrativo da CAIXA. Não representa proposta de crédito. TR, seguros, CET, tarifas, datas e valores reais dependem das condições contratuais e da análise do banco.</p></div>

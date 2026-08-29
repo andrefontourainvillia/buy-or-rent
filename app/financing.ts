@@ -8,6 +8,10 @@ export const TR_FALLBACK = {
 export const ENTRY_PERCENT_MIN = 20;
 export const ENTRY_PERCENT_MAX = 100;
 
+// FGTS rende TR do período + 3% a.a. (Lei 8.036/1990), linear = 0,25% a.m.
+export const FGTS_MONTHLY_YIELD_BONUS = 0.25;
+export const FGTS_AMORTIZATION_INTERVAL_MONTHS = 24;
+
 export type TrReference = {
   monthlyPercent: number;
   startDate: string;
@@ -29,6 +33,20 @@ export type ScheduleRow = {
   total: number;
   realAmortization: number;
   balance: number;
+  fgtsDeposit: number;
+  fgtsBalance: number;
+  fgtsAmortization: number;
+};
+
+export type FgtsExtraordinaryAmortization = {
+  monthlyContribution: number;
+  annualRaisePercent: number;
+};
+
+export type FgtsInputs = {
+  currentBalance: number;
+  monthlyYieldPercent: number;
+  extraordinaryAmortization?: FgtsExtraordinaryAmortization;
 };
 
 export type FinancingInputs = {
@@ -41,6 +59,7 @@ export type FinancingInputs = {
   dfiMonthlyPercent: number;
   monthlyFee: number;
   firstDue: string;
+  fgts?: FgtsInputs;
 };
 
 export const shouldApplyAutomaticTr = (wasEditedManually: boolean) => !wasEditedManually;
@@ -53,6 +72,12 @@ export const formatFinancingPeriod = (months: number) => {
   const monthLabel = `${remainingMonths} ${remainingMonths === 1 ? 'mês' : 'meses'}`;
   if (years && remainingMonths) return `${yearLabel} e ${monthLabel}`;
   return years ? yearLabel : monthLabel;
+};
+
+export const formatFinancingPeriodWithMonths = (months: number) => {
+  const totalMonths = Math.max(0, Math.round(months));
+  const monthLabel = `${totalMonths} ${totalMonths === 1 ? 'mês' : 'meses'}`;
+  return `${formatFinancingPeriod(totalMonths)} ("${monthLabel}")`;
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -76,6 +101,11 @@ export const entryPercentFromAmount = (property: number, entry: number) => {
   if (price === 0) return ENTRY_PERCENT_MIN;
   return normalizeEntryAmount(price, entry) / price * 100;
 };
+
+export const computeFgtsMonthlyRate = (trMonthlyPercent: number) => Math.max(0, trMonthlyPercent) + FGTS_MONTHLY_YIELD_BONUS;
+
+export const clampFgtsToEntry = (entry: number, fgtsCurrentBalance: number) =>
+  Math.min(Math.max(0, entry), Math.max(0, fgtsCurrentBalance));
 
 const brDate = (iso: string, offset: number) => {
   const [year, month, day] = iso.split('-').map(Number);
@@ -136,14 +166,33 @@ export function calculateSchedule(inputs: FinancingInputs) {
   const term = clamp(Math.round(inputs.months), 1, 420);
   const monthlyRate = Math.max(0, inputs.annualNominalRate) / 100 / 12;
   const trMonthly = Math.max(0, inputs.trMonthlyPercent) / 100;
+  const fgtsAmortizationPlan = inputs.fgts?.extraordinaryAmortization;
+  const fgtsYieldMonthly = Math.max(0, inputs.fgts?.monthlyYieldPercent ?? 0) / 100;
   let balance = financed;
+  let fgtsAccrued = 0;
   const rows: ScheduleRow[] = [];
 
   for (let i = 1; i <= term; i += 1) {
     const remainingMonths = term - i + 1;
     const openingBalance = balance;
     const correction = openingBalance * trMonthly;
-    const correctedBalance = openingBalance + correction;
+    let correctedBalance = openingBalance + correction;
+
+    let fgtsAmortization = 0;
+    let fgtsDeposit = 0;
+    if (fgtsAmortizationPlan) {
+      const raiseCycles = Math.floor((i - 1) / 12);
+      const monthlyContribution = fgtsAmortizationPlan.monthlyContribution
+        * Math.pow(1 + Math.max(0, fgtsAmortizationPlan.annualRaisePercent) / 100, raiseCycles);
+      fgtsDeposit = Math.max(0, monthlyContribution);
+      fgtsAccrued = fgtsAccrued * (1 + fgtsYieldMonthly) + fgtsDeposit;
+      if (i % FGTS_AMORTIZATION_INTERVAL_MONTHS === 0) {
+        fgtsAmortization = Math.min(fgtsAccrued, correctedBalance);
+        correctedBalance -= fgtsAmortization;
+        fgtsAccrued = Math.max(0, fgtsAccrued - fgtsAmortization);
+      }
+    }
+
     const amort = remainingMonths === 1 ? correctedBalance : correctedBalance / remainingMonths;
     const interest = correctedBalance * monthlyRate;
     const mip = correctedBalance * Math.max(0, inputs.mipMonthlyPercent) / 100;
@@ -168,7 +217,12 @@ export function calculateSchedule(inputs: FinancingInputs) {
       total,
       realAmortization,
       balance,
+      fgtsDeposit,
+      fgtsBalance: fgtsAccrued,
+      fgtsAmortization,
     });
+
+    if (balance <= 0) break;
   }
 
   const totals = rows.reduce(
@@ -179,15 +233,16 @@ export function calculateSchedule(inputs: FinancingInputs) {
       fees: acc.fees + row.fee,
       correction: acc.correction + row.correction,
       total: acc.total + row.total,
+      fgtsAmortization: acc.fgtsAmortization + row.fgtsAmortization,
     }),
-    { payments: 0, interest: 0, insurance: 0, fees: 0, correction: 0, total: 0 },
+    { payments: 0, interest: 0, insurance: 0, fees: 0, correction: 0, total: 0, fgtsAmortization: 0 },
   );
 
   return {
     price,
     entry,
     financed,
-    term,
+    term: rows.length,
     rows,
     totals,
     monthlyRate,

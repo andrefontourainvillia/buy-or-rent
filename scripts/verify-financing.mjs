@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import {
   calculateSchedule,
+  clampFgtsToEntry,
+  computeFgtsMonthlyRate,
   entryFromPercent,
   entryPercentFromAmount,
+  FGTS_MONTHLY_YIELD_BONUS,
   fetchTrReference,
   formatFinancingPeriod,
+  formatFinancingPeriodWithMonths,
   normalizeEntryAmount,
   parseBcbTrPayload,
   shouldApplyAutomaticTr,
@@ -89,6 +93,12 @@ assert.equal(formatFinancingPeriod(14), '1 ano e 2 meses');
 assert.equal(formatFinancingPeriod(24), '2 anos');
 assert.equal(formatFinancingPeriod(28), '2 anos e 4 meses');
 assert.equal(formatFinancingPeriod(37), '3 anos e 1 mês');
+assert.equal(formatFinancingPeriodWithMonths(0), '0 meses ("0 meses")');
+assert.equal(formatFinancingPeriodWithMonths(1), '1 mês ("1 mês")');
+assert.equal(formatFinancingPeriodWithMonths(10), '10 meses ("10 meses")');
+assert.equal(formatFinancingPeriodWithMonths(12), '1 ano ("12 meses")');
+assert.equal(formatFinancingPeriodWithMonths(14), '1 ano e 2 meses ("14 meses")');
+assert.equal(formatFinancingPeriodWithMonths(24), '2 anos ("24 meses")');
 
 const belowMinimumEntry = calculateSchedule({ ...base, down: 0, trMonthlyPercent: 0 });
 assert.equal(belowMinimumEntry.entry, 130000);
@@ -119,5 +129,59 @@ assert.ok(Math.abs(withTr.rows[0].payment - withTr.rows[0].amort - withTr.rows[0
 assert.ok(Math.abs(withTr.rows[0].total - withTr.rows[0].payment - withTr.rows[0].mip - withTr.rows[0].dfi - withTr.rows[0].fee) <= 0.01);
 assert.ok(withTr.rows.at(-1).balance <= 0.01);
 assert.ok(withTr.totals.correction > 0);
+
+assert.equal(FGTS_MONTHLY_YIELD_BONUS, 0.25);
+assert.equal(computeFgtsMonthlyRate(0.1692), 0.4192);
+assert.equal(computeFgtsMonthlyRate(-1), 0.25);
+
+assert.equal(clampFgtsToEntry(130000, 200000), 130000);
+assert.equal(clampFgtsToEntry(130000, 50000), 50000);
+assert.equal(clampFgtsToEntry(130000, -10), 0);
+
+const fgtsCompositionOnly = calculateSchedule({ ...base, trMonthlyPercent: 0.1692, fgts: { currentBalance: 50000, monthlyYieldPercent: 0.4192 } });
+assert.equal(fgtsCompositionOnly.rows.length, withTr.rows.length);
+assert.equal(fgtsCompositionOnly.totals.fgtsAmortization, 0);
+assert.ok(Math.abs(fgtsCompositionOnly.rows.at(-1).balance - withTr.rows.at(-1).balance) < 1e-8);
+
+const noFeeBase = { property: 100000, down: 20000, months: 36, annualNominalRate: 0, trMonthlyPercent: 0, mipMonthlyPercent: 0, dfiMonthlyPercent: 0, monthlyFee: 0, firstDue: '2026-01-31' };
+
+const fgtsPartialAmortization = calculateSchedule({
+  ...noFeeBase,
+  fgts: { currentBalance: 0, monthlyYieldPercent: 0, extraordinaryAmortization: { monthlyContribution: 300, annualRaisePercent: 0 } },
+});
+assert.equal(fgtsPartialAmortization.rows.length, 36);
+assert.equal(fgtsPartialAmortization.term, 36);
+assert.equal(fgtsPartialAmortization.rows[0].fgtsDeposit, 300);
+assert.equal(fgtsPartialAmortization.rows[0].fgtsBalance, 300);
+assert.equal(fgtsPartialAmortization.rows[11].fgtsDeposit, 300);
+assert.equal(fgtsPartialAmortization.rows[11].fgtsBalance, 3600);
+assert.equal(fgtsPartialAmortization.rows[23].fgtsDeposit, 300);
+assert.ok(Math.abs(fgtsPartialAmortization.rows[23].fgtsAmortization - 7200) < 0.01);
+assert.equal(fgtsPartialAmortization.rows[23].fgtsBalance, 0);
+assert.equal(fgtsPartialAmortization.rows[24].fgtsDeposit, 300);
+assert.equal(fgtsPartialAmortization.rows[24].fgtsBalance, 300);
+assert.equal(fgtsPartialAmortization.rows[24].fgtsAmortization, 0);
+assert.ok(Math.abs(fgtsPartialAmortization.totals.fgtsAmortization - 7200) < 0.01);
+assert.ok(fgtsPartialAmortization.rows.at(-1).balance <= 0.01);
+
+const fgtsWithRaiseAndYield = calculateSchedule({
+  ...noFeeBase,
+  fgts: { currentBalance: 0, monthlyYieldPercent: 1, extraordinaryAmortization: { monthlyContribution: 500, annualRaisePercent: 10 } },
+});
+assert.equal(fgtsWithRaiseAndYield.rows[0].fgtsDeposit, 500);
+assert.equal(fgtsWithRaiseAndYield.rows[0].fgtsBalance, 500);
+assert.equal(fgtsWithRaiseAndYield.rows[11].fgtsDeposit, 500);
+assert.equal(fgtsWithRaiseAndYield.rows[12].fgtsDeposit, 550);
+
+const fgtsEarlyPayoff = calculateSchedule({
+  ...noFeeBase,
+  fgts: { currentBalance: 0, monthlyYieldPercent: 0, extraordinaryAmortization: { monthlyContribution: 1500, annualRaisePercent: 0 } },
+});
+assert.equal(fgtsEarlyPayoff.rows.length, 24);
+assert.equal(fgtsEarlyPayoff.term, 24);
+assert.equal(fgtsEarlyPayoff.rows[23].fgtsDeposit, 1500);
+assert.ok(Math.abs(fgtsEarlyPayoff.rows.at(-1).fgtsAmortization - 28888.888888) < 0.01);
+assert.ok(fgtsEarlyPayoff.rows.at(-1).fgtsBalance >= 0);
+assert.ok(fgtsEarlyPayoff.rows.at(-1).balance <= 0.01);
 
 console.log('Financing checks passed.');
