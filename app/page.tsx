@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -229,8 +228,8 @@ export default function Home() {
   };
 
   return <main>
-    <header className="topbar"><div className="brand"><span className="mark"><Image src="/fontoura-logo.png" alt="Fontoura" width={96} height={34} /></span><span>SimulaLar</span></div></header>
-    <section className="hero"><div className="hero-banner"><Image src="/og.png" alt="SimulaLar — seu financiamento, mês a mês" width={1731} height={909} priority /></div><div><p className="eyebrow">Crédito imobiliário, sem mistério</p><h1>Veja seu financiamento<br /><em>mês a mês.</em></h1><p className="subtitle">Ajuste os valores e entenda como entrada, prazo, juros e seguros mudam o custo da sua casa.</p></div></section>
+    <header className="topbar"><div className="brand"><span className="mark"><img src="/fontoura-logo.png" alt="Fontoura" width={96} height={34} /></span><span>SimulaLar</span></div></header>
+    <section className="hero"><div className="hero-banner"><img src="/og.png" alt="SimulaLar — seu financiamento, mês a mês" width={1731} height={909} fetchPriority="high" /></div><div><p className="eyebrow">Crédito imobiliário, sem mistério</p><h1>Veja seu financiamento<br /><em>mês a mês.</em></h1><p className="subtitle">Ajuste os valores e entenda como entrada, prazo, juros e seguros mudam o custo da sua casa.</p></div></section>
 
     <section className="workspace">
       <div className="controls card">
@@ -309,7 +308,7 @@ export default function Home() {
       </div>
       <div className="disclaimer"><b>Importante</b><p>Esta é uma simulação matemática independente, inspirada na estrutura do demonstrativo da CAIXA. Não representa proposta de crédito. TR, seguros, CET, tarifas, datas e valores reais dependem das condições contratuais e da análise do banco.</p></div>
     </section>
-    <footer><div className="brand"><span className="mark"><Image src="/fontoura-logo.png" alt="Fontoura" width={76} height={27} /></span><span>SimulaLar</span></div><span>Feito para comparar cenários com clareza.</span></footer>
+    <footer><div className="brand"><span className="mark"><img src="/fontoura-logo.png" alt="Fontoura" width={76} height={27} /></span><span>SimulaLar</span></div><span>Feito para comparar cenários com clareza.</span></footer>
   </main>;
 }
 
