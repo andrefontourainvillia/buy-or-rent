@@ -36,8 +36,10 @@ export type ScheduleRow = {
   fgtsDeposit: number;
   fgtsBalance: number;
   fgtsAmortization: number;
+  extraAmortization: number;
   cumulativeOwnDisbursed: number;
   cumulativeFgtsDisbursed: number;
+  cumulativeExtraAmortization: number;
 };
 
 export type FgtsExtraordinaryAmortization = {
@@ -51,6 +53,10 @@ export type FgtsInputs = {
   extraordinaryAmortization?: FgtsExtraordinaryAmortization;
 };
 
+export type ExtraAmortization = {
+  payLastInstallmentMonthly: boolean;
+};
+
 export type FinancingInputs = {
   property: number;
   down: number;
@@ -62,6 +68,7 @@ export type FinancingInputs = {
   monthlyFee: number;
   firstDue: string;
   fgts?: FgtsInputs;
+  extraAmortization?: ExtraAmortization;
 };
 
 export const shouldApplyAutomaticTr = (wasEditedManually: boolean) => !wasEditedManually;
@@ -171,18 +178,40 @@ export function calculateSchedule(inputs: FinancingInputs) {
   const fgtsAmortizationPlan = inputs.fgts?.extraordinaryAmortization;
   const fgtsYieldMonthly = Math.max(0, inputs.fgts?.monthlyYieldPercent ?? 0) / 100;
   const fgtsEntryPortion = inputs.fgts ? clampFgtsToEntry(entry, inputs.fgts.currentBalance) : 0;
+  const extraAmortizationEnabled = inputs.extraAmortization?.payLastInstallmentMonthly ?? false;
   let balance = financed;
+  let remainingTerm = term;
   let fgtsAccrued = 0;
   let cumulativeOwnDisbursed = entry - fgtsEntryPortion;
   let cumulativeFgtsDisbursed = fgtsEntryPortion;
+  let cumulativeExtraAmortization = 0;
   const rows: ScheduleRow[] = [];
 
-  for (let i = 1; i <= term; i += 1) {
-    const remainingMonths = term - i + 1;
+  for (let i = 1; i <= term && remainingTerm > 0; i += 1) {
     const openingBalance = balance;
     const correction = openingBalance * trMonthly;
-    let correctedBalance = openingBalance + correction;
+    const correctedBalance = openingBalance + correction;
 
+    const amort = remainingTerm === 1 ? correctedBalance : correctedBalance / remainingTerm;
+    const interest = correctedBalance * monthlyRate;
+    const mip = correctedBalance * Math.max(0, inputs.mipMonthlyPercent) / 100;
+    const dfi = price * Math.max(0, inputs.dfiMonthlyPercent) / 100;
+    const fee = Math.max(0, inputs.monthlyFee);
+    const payment = amort + interest;
+    const total = payment + mip + dfi + fee;
+    balance = Math.max(0, correctedBalance - amort);
+    remainingTerm -= 1;
+
+    // Paga a última parcela projetada do cronograma vigente e a retira do prazo
+    let extraAmortization = 0;
+    if (extraAmortizationEnabled && remainingTerm > 0 && balance > 0) {
+      const projectedLastPayment = balance * Math.pow(1 + trMonthly, remainingTerm) / remainingTerm * (1 + monthlyRate);
+      extraAmortization = Math.min(projectedLastPayment, balance);
+      balance = Math.max(0, balance - extraAmortization);
+      remainingTerm -= 1;
+    }
+
+    // FGTS abate o saldo após o boleto e a amortização extra do mês
     let fgtsAmortization = 0;
     let fgtsDeposit = 0;
     if (fgtsAmortizationPlan) {
@@ -191,24 +220,17 @@ export function calculateSchedule(inputs: FinancingInputs) {
         * Math.pow(1 + Math.max(0, fgtsAmortizationPlan.annualRaisePercent) / 100, raiseCycles);
       fgtsDeposit = Math.max(0, monthlyContribution);
       fgtsAccrued = fgtsAccrued * (1 + fgtsYieldMonthly) + fgtsDeposit;
-      if (i % FGTS_AMORTIZATION_INTERVAL_MONTHS === 0) {
-        fgtsAmortization = Math.min(fgtsAccrued, correctedBalance);
-        correctedBalance -= fgtsAmortization;
+      if (i % FGTS_AMORTIZATION_INTERVAL_MONTHS === 0 && balance > 0) {
+        fgtsAmortization = Math.min(fgtsAccrued, balance);
+        balance = Math.max(0, balance - fgtsAmortization);
         fgtsAccrued = Math.max(0, fgtsAccrued - fgtsAmortization);
       }
     }
 
-    const amort = remainingMonths === 1 ? correctedBalance : correctedBalance / remainingMonths;
-    const interest = correctedBalance * monthlyRate;
-    const mip = correctedBalance * Math.max(0, inputs.mipMonthlyPercent) / 100;
-    const dfi = price * Math.max(0, inputs.dfiMonthlyPercent) / 100;
-    const fee = Math.max(0, inputs.monthlyFee);
-    const payment = amort + interest;
-    const total = payment + mip + dfi + fee;
-    balance = Math.max(0, correctedBalance - amort);
     const realAmortization = openingBalance - balance;
-    cumulativeOwnDisbursed += total;
+    cumulativeOwnDisbursed += total + extraAmortization;
     cumulativeFgtsDisbursed += fgtsAmortization;
+    cumulativeExtraAmortization += extraAmortization;
     rows.push({
       n: i,
       due: brDate(inputs.firstDue, i - 1),
@@ -227,8 +249,10 @@ export function calculateSchedule(inputs: FinancingInputs) {
       fgtsDeposit,
       fgtsBalance: fgtsAccrued,
       fgtsAmortization,
+      extraAmortization,
       cumulativeOwnDisbursed,
       cumulativeFgtsDisbursed,
+      cumulativeExtraAmortization,
     });
 
     if (balance <= 0) break;
@@ -243,8 +267,9 @@ export function calculateSchedule(inputs: FinancingInputs) {
       correction: acc.correction + row.correction,
       total: acc.total + row.total,
       fgtsAmortization: acc.fgtsAmortization + row.fgtsAmortization,
+      extraAmortization: acc.extraAmortization + row.extraAmortization,
     }),
-    { payments: 0, interest: 0, insurance: 0, fees: 0, correction: 0, total: 0, fgtsAmortization: 0 },
+    { payments: 0, interest: 0, insurance: 0, fees: 0, correction: 0, total: 0, fgtsAmortization: 0, extraAmortization: 0 },
   );
 
   return {

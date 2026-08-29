@@ -56,6 +56,30 @@ A função de validação aceita apenas valores numéricos finitos, não negativ
 - Os valores são calculados com precisão decimal e arredondados somente na apresentação.
 - Vencimentos nos dias 29, 30 ou 31 são ajustados para o último dia quando o mês de destino não tiver esse dia.
 
+## Amortizações extraordinárias
+
+Além do boleto mensal (SAC + TR + seguros + tarifa), a simulação aceita duas amortizações extraordinárias opcionais, aplicadas **na mesma ordem, todo mês**:
+
+1. **Boleto** — SAC padrão: `amort = saldoCorrigido ÷ parcelasRestantes`; `saldo -= amort`; `parcelasRestantes -= 1`.
+2. **Amortização extra mensal** (`payLastInstallmentMonthly`) — paga o valor da última parcela *do cronograma vigente* e a retira do prazo. Como esse valor depende das parcelas restantes, que por sua vez dependem do saldo já reduzido pelo boleto do mês, ele é recalculado a cada mês por uma fórmula fechada (sem simular o restante do contrato):
+
+> extra = saldo × (1 + TR)^parcelasRestantes ÷ parcelasRestantes × (1 + jurosMensal)
+
+Em seguida `saldo -= extra` e `parcelasRestantes -= 1` novamente. Por retirar 2 parcelas do prazo a cada mês em que está ativa (1 do boleto + 1 da extra), essa opção reduz o prazo contratado praticamente à metade, com o valor do boleto tendendo a ficar estável ao longo do tempo. Em cenário sem TR e sem juros, a prova é direta: `extra` iguala `amort` todo mês, então o saldo cai duas vezes mais rápido e o contrato de N meses quita em `⌈N/2⌉` meses.
+3. **Amortização extraordinária via FGTS** — a cada 24 meses (`FGTS_AMORTIZATION_INTERVAL_MONTHS`), o saldo acumulado de FGTS (aportes mensais + rendimento) abate o saldo devedor **depois** do boleto e da amortização extra do mês, sem retirar parcelas do prazo diretamente. Se o valor acumulado for suficiente para zerar o saldo remanescente, o financiamento é liquidado naquele mês (a quitação antecipada só ocorre nesse cenário — combinar FGTS com a amortização extra mensal reduz o valor das parcelas restantes, mas não acelera o prazo além do que a amortização extra já provoca, a menos que o FGTS zere o saldo antes disso).
+
+Como o saldo é atualizado sequencialmente (boleto → extra → FGTS), os juros e o MIP de cada mês incidem sobre o saldo corrigido **antes** de qualquer amortização extraordinária; apenas o saldo do mês seguinte reflete a redução.
+
+
+### Eliminação de circularidade em amortizações extraordinárias mensais
+
+No SAC com TR, se o saldo após o boleto é *B* e restam *r* parcelas, a última parcela projetada tem valor exato:
+
+```math
+	P_{\text{última}} = \frac{B \cdot (1+TR)^r}{r} \cdot (1 + j)
+```
+Isso elimina a circularidade sem precisar re-simular o cronograma inteiro a cada mês.
+
 ## Deploy
 
 Todo push para `main` dispara `.github/workflows/deploy-pages.yml`. O build recebe o caminho base do repositório e publica o conteúdo de `dist` no GitHub Pages.

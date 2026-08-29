@@ -181,7 +181,8 @@ const fgtsEarlyPayoff = calculateSchedule({
 assert.equal(fgtsEarlyPayoff.rows.length, 24);
 assert.equal(fgtsEarlyPayoff.term, 24);
 assert.equal(fgtsEarlyPayoff.rows[23].fgtsDeposit, 1500);
-assert.ok(Math.abs(fgtsEarlyPayoff.rows.at(-1).fgtsAmortization - 28888.888888) < 0.01);
+// FGTS abate após o boleto: saldo restante = 80000 × 12/36
+assert.ok(Math.abs(fgtsEarlyPayoff.rows.at(-1).fgtsAmortization - 26666.666666) < 0.01);
 assert.ok(fgtsEarlyPayoff.rows.at(-1).fgtsBalance >= 0);
 assert.ok(fgtsEarlyPayoff.rows.at(-1).balance <= 0.01);
 
@@ -205,5 +206,52 @@ assert.ok(Math.abs(
   (fgtsCumulative.rows.at(-1).cumulativeOwnDisbursed + fgtsCumulative.rows.at(-1).cumulativeFgtsDisbursed)
   - (fgtsCumulative.entry + fgtsCumulative.totals.total + fgtsCumulative.totals.fgtsAmortization),
 ) < 0.01);
+
+assert.ok(noFgtsCumulative.rows.every((row) => row.extraAmortization === 0 && row.cumulativeExtraAmortization === 0));
+assert.equal(noFgtsCumulative.totals.extraAmortization, 0);
+
+// Sem juros/TR: extra mensal = amortização do boleto, boleto constante e prazo cai pela metade
+const extraHalving = calculateSchedule({ ...noFeeBase, extraAmortization: { payLastInstallmentMonthly: true } });
+assert.equal(extraHalving.rows.length, 18);
+assert.equal(extraHalving.term, 18);
+let extraAccumulated = 0;
+extraHalving.rows.forEach((row) => {
+  assert.ok(Math.abs(row.amort - 80000 / 36) < 0.01);
+  assert.ok(Math.abs(row.extraAmortization - 80000 / 36) < 0.01);
+  extraAccumulated += row.extraAmortization;
+  assert.ok(Math.abs(row.cumulativeExtraAmortization - extraAccumulated) < 1e-8);
+});
+assert.ok(Math.abs(extraHalving.totals.extraAmortization - 40000) < 0.01);
+assert.ok(extraHalving.rows.at(-1).balance <= 0.01);
+assert.ok(Math.abs(
+  extraHalving.rows.at(-1).cumulativeOwnDisbursed
+  - (extraHalving.entry + extraHalving.totals.total + extraHalving.totals.extraAmortization),
+) < 0.01);
+
+// Com juros 1% a.m.: extra do mês = saldo pós-boleto ÷ restantes × (1 + juros)
+const extraWithInterest = calculateSchedule({ ...noFeeBase, months: 4, annualNominalRate: 12, extraAmortization: { payLastInstallmentMonthly: true } });
+assert.equal(extraWithInterest.rows.length, 2);
+assert.ok(Math.abs(extraWithInterest.rows[0].extraAmortization - 20200) < 0.01);
+assert.ok(Math.abs(extraWithInterest.rows[1].extraAmortization - 19900) < 0.01);
+assert.ok(extraWithInterest.rows.at(-1).balance <= 0.01);
+
+// Com TR 10% a.m.: projeção usa (1+TR)^restantes — 58666,67 × 1,1² ÷ 2
+const extraWithTr = calculateSchedule({ ...noFeeBase, months: 3, trMonthlyPercent: 10, extraAmortization: { payLastInstallmentMonthly: true } });
+assert.equal(extraWithTr.rows.length, 2);
+assert.ok(Math.abs(extraWithTr.rows[0].extraAmortization - 58666.666666 * 1.21 / 2) < 0.01);
+assert.ok(extraWithTr.rows.at(-1).balance <= 0.01);
+
+// Combinado: boleto → extra → FGTS; FGTS do mês 24 abate saldo já reduzido pelas extras
+const combinedFgtsAndExtra = calculateSchedule({
+  ...noFeeBase,
+  months: 60,
+  fgts: { currentBalance: 0, monthlyYieldPercent: 0, extraordinaryAmortization: { monthlyContribution: 300, annualRaisePercent: 0 } },
+  extraAmortization: { payLastInstallmentMonthly: true },
+});
+assert.equal(combinedFgtsAndExtra.rows.length, 30);
+assert.ok(Math.abs(combinedFgtsAndExtra.rows[23].fgtsAmortization - 7200) < 0.01);
+assert.ok(combinedFgtsAndExtra.rows.at(-1).balance <= 0.01);
+assert.ok(combinedFgtsAndExtra.totals.fgtsAmortization > 0);
+assert.ok(combinedFgtsAndExtra.totals.extraAmortization > 0);
 
 console.log('Financing checks passed.');
