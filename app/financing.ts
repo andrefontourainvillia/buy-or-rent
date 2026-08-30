@@ -116,6 +116,61 @@ export const computeFgtsMonthlyRate = (trMonthlyPercent: number) => Math.max(0, 
 export const clampFgtsToEntry = (entry: number, fgtsCurrentBalance: number) =>
   Math.min(Math.max(0, entry), Math.max(0, fgtsCurrentBalance));
 
+export const annualToMonthlyRate = (annualPercent: number) =>
+  Math.pow(Math.max(0, 1 + annualPercent / 100), 1 / 12) - 1;
+
+export const composeRealAndInflation = (realAnnualPercent: number, ipcaAnnualPercent: number) =>
+  ((1 + realAnnualPercent / 100) * (1 + ipcaAnnualPercent / 100) - 1) * 100;
+
+export type RentVsBuyInputs = {
+  horizonMonths: number;
+  initialRent: number;
+  rentAnnualAdjustPercent: number;
+  investmentAnnualRealPercent: number;
+  ipcaAnnualPercent: number;
+  documentationPercent: number;
+  fgtsMonthlyYieldPercent: number;
+  fgtsMonthlyContribution: number;
+  fgtsAnnualRaisePercent: number;
+  appreciationScenariosAnnualPercent: number[];
+};
+
+export type RentVsBuyRow = {
+  n: number;
+  rent: number;
+  buyerOutlay: number;
+  investedDifference: number;
+  portfolio: number;
+  buyerFgts: number;
+  renterFgts: number;
+  debtBalance: number;
+};
+
+export type RentVsBuyScenario = {
+  appreciationAnnualPercent: number;
+  propertyValue: number;
+  buyerNetWorth: number;
+  advantage: number;
+};
+
+export type RentVsBuyResult = {
+  horizonMonths: number;
+  documentationCosts: number;
+  initialPortfolio: number;
+  rows: RentVsBuyRow[];
+  totalRentPaid: number;
+  totalBuyerPaid: number;
+  portfolio: number;
+  renterFgts: number;
+  renterNetWorth: number;
+  debtBalance: number;
+  buyerFgts: number;
+  residualDebt: number;
+  buyerFgtsLeftover: number;
+  scenarios: RentVsBuyScenario[];
+  breakevenAnnualPercent: number | null;
+};
+
 const brDate = (iso: string, offset: number) => {
   const [year, month, day] = iso.split('-').map(Number);
   const targetMonth = month - 1 + offset;
@@ -282,5 +337,84 @@ export function calculateSchedule(inputs: FinancingInputs) {
     monthlyRate,
     initialAmort: rows[0]?.amort ?? 0,
     effective: (Math.pow(1 + monthlyRate, 12) - 1) * 100,
+  };
+}
+
+export function compareRentVsBuy(financing: FinancingInputs, comparison: RentVsBuyInputs): RentVsBuyResult {
+  const schedule = calculateSchedule(financing);
+  const horizonMonths = clamp(Math.round(comparison.horizonMonths), 1, 480);
+  const documentationCosts = roundCurrency(schedule.price * Math.max(0, comparison.documentationPercent) / 100);
+  const fgtsEntryPortion = financing.fgts ? clampFgtsToEntry(schedule.entry, financing.fgts.currentBalance) : 0;
+  const fgtsMonthlyRate = Math.max(0, comparison.fgtsMonthlyYieldPercent) / 100;
+  const investmentMonthlyRate = annualToMonthlyRate(
+    composeRealAndInflation(comparison.investmentAnnualRealPercent, comparison.ipcaAnnualPercent),
+  );
+  // O locatário mantém investido o que o comprador gastaria com entrada própria e documentação
+  const initialPortfolio = schedule.entry - fgtsEntryPortion + documentationCosts;
+
+  let portfolio = initialPortfolio;
+  let buyerFgts = Math.max(0, (financing.fgts?.currentBalance ?? 0) - fgtsEntryPortion);
+  let renterFgts = Math.max(0, financing.fgts?.currentBalance ?? 0);
+  let totalRentPaid = 0;
+  let totalBuyerPaid = 0;
+  const rows: RentVsBuyRow[] = [];
+
+  for (let month = 1; month <= horizonMonths; month += 1) {
+    const elapsedYears = Math.floor((month - 1) / 12);
+    const rent = Math.max(0, comparison.initialRent)
+      * Math.pow(1 + Math.max(0, comparison.rentAnnualAdjustPercent) / 100, elapsedYears);
+    const scheduleRow = schedule.rows[month - 1];
+    const buyerOutlay = scheduleRow ? scheduleRow.total + scheduleRow.extraAmortization : 0;
+    const investedDifference = buyerOutlay - rent;
+    portfolio = portfolio * (1 + investmentMonthlyRate) + investedDifference;
+    const contribution = Math.max(0, comparison.fgtsMonthlyContribution)
+      * Math.pow(1 + Math.max(0, comparison.fgtsAnnualRaisePercent) / 100, elapsedYears);
+    buyerFgts = Math.max(0, buyerFgts * (1 + fgtsMonthlyRate) + contribution - (scheduleRow?.fgtsAmortization ?? 0));
+    renterFgts = renterFgts * (1 + fgtsMonthlyRate) + contribution;
+    totalRentPaid += rent;
+    totalBuyerPaid += buyerOutlay;
+    rows.push({
+      n: month,
+      rent,
+      buyerOutlay,
+      investedDifference,
+      portfolio,
+      buyerFgts,
+      renterFgts,
+      debtBalance: scheduleRow?.balance ?? 0,
+    });
+  }
+
+  const debtBalance = schedule.rows[horizonMonths - 1]?.balance ?? 0;
+  const residualDebt = Math.max(0, debtBalance - buyerFgts);
+  const buyerFgtsLeftover = Math.max(0, buyerFgts - debtBalance);
+  const renterNetWorth = portfolio + renterFgts;
+  const years = horizonMonths / 12;
+  const scenarios = comparison.appreciationScenariosAnnualPercent.map((appreciationAnnualPercent) => {
+    const propertyValue = schedule.price * Math.pow(Math.max(0, 1 + appreciationAnnualPercent / 100), years);
+    const buyerNetWorth = propertyValue - residualDebt + buyerFgtsLeftover;
+    return { appreciationAnnualPercent, propertyValue, buyerNetWorth, advantage: buyerNetWorth - renterNetWorth };
+  });
+  const requiredPropertyValue = renterNetWorth + residualDebt - buyerFgtsLeftover;
+  const breakevenAnnualPercent = schedule.price > 0 && requiredPropertyValue > 0
+    ? (Math.pow(requiredPropertyValue / schedule.price, 1 / years) - 1) * 100
+    : null;
+
+  return {
+    horizonMonths,
+    documentationCosts,
+    initialPortfolio,
+    rows,
+    totalRentPaid,
+    totalBuyerPaid,
+    portfolio,
+    renterFgts,
+    renterNetWorth,
+    debtBalance,
+    buyerFgts,
+    residualDebt,
+    buyerFgtsLeftover,
+    scenarios,
+    breakevenAnnualPercent,
   };
 }

@@ -121,6 +121,27 @@ h1 em {
     gap: 18px
 }
 
+.compare-grid {
+    display: grid;
+    grid-template-columns: 1.08fr .92fr;
+    gap: 18px;
+    margin-bottom: 18px
+}
+
+.compare-grid.single {
+    grid-template-columns: 1fr
+}
+
+.compare-grid .field-grid+.field-grid {
+    margin-top: 14px
+}
+
+.compare-note {
+    display: block;
+    margin-top: 12px;
+    color: #71838e
+}
+
 .card {
     border: 1px solid var(--line);
     border-radius: 22px;
@@ -784,6 +805,10 @@ footer .mark {
     }
 
     .workspace {
+        grid-template-columns: 1fr
+    }
+
+    .compare-grid {
         grid-template-columns: 1fr
     }
 

@@ -6,6 +6,7 @@ import { assetPath } from './asset-path';
 import {
   calculateSchedule,
   clampFgtsToEntry,
+  compareRentVsBuy,
   computeFgtsMonthlyRate,
   entryFromPercent,
   ENTRY_PERCENT_MAX,
@@ -68,9 +69,35 @@ const TOOLTIP_COPY = {
   extraAmortizationEnable: 'Além do boleto, paga todo mês o valor da última parcela do cronograma vigente, retirando-a do prazo. O valor é recalculado a cada mês, pois cada amortização reduz o saldo devedor e muda a última parcela.',
   extraAmortizationColumn: 'Valor pago no mês para quitar a última parcela do cronograma vigente. Recalculado mensalmente: saldo após o boleto, corrigido pela TR até o fim do prazo, dividido pelas parcelas restantes, acrescido dos juros.',
   extraAmortizationTotalColumn: 'Soma acumulada da amortização extra mensal paga até esta parcela.',
+  compareEnable: 'Ativa o comparativo entre financiar e alugar: adiciona colunas do cenário do locatário à tabela e o painel de patrimônio no horizonte.',
+  compareRent: 'Aluguel mensal de um imóvel equivalente. É o que o locatário paga em vez do boleto do financiamento.',
+  compareRentRaise: 'Reajuste anual do aluguel, aplicado em degraus a cada 12 meses.',
+  compareHorizon: 'Quantidade de meses simulados na comparação entre comprar e alugar.',
+  compareInvestReal: 'Retorno real (acima da inflação) da carteira onde o locatário investe a entrada e a diferença mensal.',
+  compareIpca: 'Inflação projetada, composta com o retorno real para obter o rendimento nominal da carteira: (1 + real) × (1 + IPCA) − 1.',
+  compareDoc: 'ITBI e cartório/escritura, em % do imóvel. O comprador paga na aquisição sem abater o saldo devedor; o locatário mantém esse valor investido.',
+  compareFgtsContribution: 'Depósito mensal de FGTS (tende a acompanhar 8% do salário CLT), idêntico nos dois cenários.',
+  compareFgtsRaise: 'Reajuste anual do depósito mensal de FGTS, simulando aumentos salariais.',
+  compareScenario: 'Valorização anual do imóvel usada para projetar o patrimônio do comprador neste cenário.',
+  compareRenterNetWorth: 'Carteira de investimentos + FGTS acumulado do locatário ao final do horizonte.',
+  comparePortfolio: 'Entrada própria + documentação investidas desde o início, rendendo a taxa nominal e somando (ou consumindo) a diferença entre boleto e aluguel todo mês.',
+  compareRenterFgts: 'FGTS do locatário: saldo atual mantido + depósitos mensais, rendendo a taxa da seção FGTS.',
+  compareDebt: 'Saldo devedor do financiamento no último mês do horizonte.',
+  compareBuyerFgts: 'FGTS do comprador no horizonte: sobra não usada na entrada + depósitos, descontando amortizações extraordinárias já aplicadas.',
+  compareResidualDebt: 'Máximo entre zero e saldo devedor − FGTS do comprador: dívida restante após quitar com o FGTS acumulado.',
+  compareTotalRent: 'Soma dos aluguéis pagos no horizonte.',
+  compareTotalBuyer: 'Soma dos boletos e amortizações extras mensais pagos pelo comprador no horizonte.',
+  compareBreakeven: 'Valorização anual do imóvel necessária para o patrimônio do comprador igualar o do locatário no fim do horizonte.',
+  rentColumn: 'Aluguel projetado do mês, com o reajuste anual aplicado em degraus a cada 12 meses.',
+  investedDifferenceColumn: 'Boleto + amortização extra − aluguel do mês. Positivo é o que o locatário investe; negativo indica retirada da carteira.',
+  renterPortfolioColumn: 'Carteira do locatário após o rendimento nominal do mês e o aporte (ou retirada) da diferença entre boleto e aluguel.',
+  renterFgtsColumn: 'FGTS acumulado do locatário após o rendimento e o depósito do mês.',
+  renterNetWorthColumn: 'Carteira investida + FGTS do locatário ao final do mês.',
 } as const;
 
 type TrSource = { kind: 'loading' | 'bcb' | 'fallback' | 'manual'; startDate?: string; endDate?: string };
+
+const SCENARIO_LABELS = ['Conservador', 'Central', 'Otimista'];
 
 function EvolutionChart({ rows, termLabel }: { rows: ScheduleRow[]; termLabel: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -148,6 +175,19 @@ export default function Home() {
   const [fgtsContribution, setFgtsContribution] = useState(300);
   const [fgtsRaise, setFgtsRaise] = useState(5);
   const [extraAmortizationEnabled, setExtraAmortizationEnabled] = useState(false);
+  const [rentComparisonEnabled, setRentComparisonEnabled] = useState(false);
+  const [showRentDetails, setShowRentDetails] = useState(false);
+  const [rentValue, setRentValue] = useState(3500);
+  const [rentRaise, setRentRaise] = useState(7);
+  const [compareHorizon, setCompareHorizon] = useState(120);
+  const [investReal, setInvestReal] = useState(6);
+  const [ipca, setIpca] = useState(4.5);
+  const [docPercent, setDocPercent] = useState(4.5);
+  const [compareFgtsContribution, setCompareFgtsContribution] = useState(0);
+  const [compareFgtsRaise, setCompareFgtsRaise] = useState(5);
+  const [scenarioConservative, setScenarioConservative] = useState(3);
+  const [scenarioCentral, setScenarioCentral] = useState(5);
+  const [scenarioOptimistic, setScenarioOptimistic] = useState(7);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -197,7 +237,7 @@ export default function Home() {
   const updateDown = (value: number) => setDown(normalizeEntryAmount(property, value));
   const updateDownPercent = (value: number) => setDown(entryFromPercent(property, value));
 
-  const result = useMemo(() => calculateSchedule({
+  const financingInputs = useMemo(() => ({
     property,
     down,
     months,
@@ -214,6 +254,19 @@ export default function Home() {
     } : undefined,
     extraAmortization: extraAmortizationEnabled ? { payLastInstallmentMonthly: true } : undefined,
   }), [property, down, months, rate, tr, mipRate, dfiRate, fee, firstDue, fgtsEnabled, fgtsBalance, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise, extraAmortizationEnabled]);
+  const result = useMemo(() => calculateSchedule(financingInputs), [financingInputs]);
+  const comparison = useMemo(() => compareRentVsBuy(financingInputs, {
+    horizonMonths: compareHorizon,
+    initialRent: rentValue,
+    rentAnnualAdjustPercent: rentRaise,
+    investmentAnnualRealPercent: investReal,
+    ipcaAnnualPercent: ipca,
+    documentationPercent: docPercent,
+    fgtsMonthlyYieldPercent: fgtsYield,
+    fgtsMonthlyContribution: fgtsAmortizationActive ? fgtsContribution : compareFgtsContribution,
+    fgtsAnnualRaisePercent: fgtsAmortizationActive ? fgtsRaise : compareFgtsRaise,
+    appreciationScenariosAnnualPercent: [scenarioConservative, scenarioCentral, scenarioOptimistic],
+  }), [financingInputs, compareHorizon, rentValue, rentRaise, investReal, ipca, docPercent, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise, compareFgtsContribution, compareFgtsRaise, scenarioConservative, scenarioCentral, scenarioOptimistic]);
   const first = result.rows[0];
   const last = result.rows.at(-1);
   const extraAmortizationFirstAmount = first?.extraAmortization ?? 0;
@@ -259,27 +312,32 @@ export default function Home() {
       + (extraAmortizationEnabled ? ';Amortização extra' : '')
       + (fgtsAmortizationActive ? ';Depósito FGTS;Saldo FGTS;Amortização FGTS' : '')
       + ';Amortização real;Saldo devedor final'
+      + (rentComparisonEnabled ? ';Aluguel;Diferença investida;Carteira locatário;FGTS locatário;Patrimônio locatário' : '')
       + (showTotals ? ';Total boletos' + (fgtsAmortizationActive ? ';Total FGTS' : '') + (extraAmortizationEnabled ? ';Total amortização extra' : '') + ';Total geral' : '');
-    const lines = result.rows.map((row) => [
-      row.n,
-      row.due,
-      row.openingBalance,
-      tr,
-      row.correction,
-      row.correctedBalance,
-      row.amort,
-      row.interest,
-      row.payment,
-      row.mip,
-      row.dfi,
-      row.fee,
-      row.total,
-      ...(extraAmortizationEnabled ? [row.extraAmortization] : []),
-      ...(fgtsAmortizationActive ? [row.fgtsDeposit, row.fgtsBalance, row.fgtsAmortization] : []),
-      row.realAmortization,
-      row.balance,
-      ...(showTotals ? [row.cumulativeOwnDisbursed, ...(fgtsAmortizationActive ? [row.cumulativeFgtsDisbursed] : []), ...(extraAmortizationEnabled ? [row.cumulativeExtraAmortization] : []), row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed] : []),
-    ].map((value, index) => index < 2 ? value : Number(value).toFixed(index === 3 ? 4 : 2).replace('.', ',')).join(';'));
+    const lines = result.rows.map((row) => {
+      const rentRow = comparison.rows[row.n - 1];
+      return [
+        row.n,
+        row.due,
+        row.openingBalance,
+        tr,
+        row.correction,
+        row.correctedBalance,
+        row.amort,
+        row.interest,
+        row.payment,
+        row.mip,
+        row.dfi,
+        row.fee,
+        row.total,
+        ...(extraAmortizationEnabled ? [row.extraAmortization] : []),
+        ...(fgtsAmortizationActive ? [row.fgtsDeposit, row.fgtsBalance, row.fgtsAmortization] : []),
+        row.realAmortization,
+        row.balance,
+        ...(rentComparisonEnabled ? [rentRow?.rent ?? 0, rentRow?.investedDifference ?? 0, rentRow?.portfolio ?? 0, rentRow?.renterFgts ?? 0, rentRow ? rentRow.portfolio + rentRow.renterFgts : 0] : []),
+        ...(showTotals ? [row.cumulativeOwnDisbursed, ...(fgtsAmortizationActive ? [row.cumulativeFgtsDisbursed] : []), ...(extraAmortizationEnabled ? [row.cumulativeExtraAmortization] : []), row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed] : []),
+      ].map((value, index) => index < 2 ? value : Number(value).toFixed(index === 3 ? 4 : 2).replace('.', ',')).join(';');
+    });
     const blob = new Blob(['\ufeff' + [header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
     const anchor = document.createElement('a');
     anchor.href = URL.createObjectURL(blob);
@@ -316,6 +374,30 @@ export default function Home() {
           </div>}
         </div>
         <label className="fgts-toggle"><input type="checkbox" checked={extraAmortizationEnabled} onChange={(event) => setExtraAmortizationEnabled(event.target.checked)} /><span>Amortizar saldo devedor todo mês com o valor da última parcela{extraAmortizationEnabled ? ` (1º mês: ${fmt(extraAmortizationFirstAmount)})` : ''}</span><InfoTooltip content={TOOLTIP_COPY.extraAmortizationEnable} /></label>
+        <div className="fgts-panel">
+          <label className="fgts-toggle"><input type="checkbox" checked={rentComparisonEnabled} onChange={(event) => setRentComparisonEnabled(event.target.checked)} /><span>Comparar com aluguel</span><InfoTooltip content={TOOLTIP_COPY.compareEnable} /></label>
+          {rentComparisonEnabled && <div className="fgts-fields">
+            <div className="field-grid three">
+              <Field label="Aluguel mensal (R$)" help={TOOLTIP_COPY.compareRent} value={rentValue} min={0} max={50000} step={50} onChange={setRentValue} />
+              <Field label="Reajuste do aluguel (% a.a.)" help={TOOLTIP_COPY.compareRentRaise} value={rentRaise} min={0} max={30} step={0.1} onChange={setRentRaise} />
+              <Field label="Horizonte (meses)" help={TOOLTIP_COPY.compareHorizon} value={compareHorizon} min={12} max={480} step={12} onChange={setCompareHorizon} />
+              <Field label="Retorno real (% a.a.)" help={TOOLTIP_COPY.compareInvestReal} value={investReal} min={0} max={20} step={0.1} onChange={setInvestReal} />
+              <Field label="IPCA projetado (% a.a.)" help={TOOLTIP_COPY.compareIpca} value={ipca} min={0} max={20} step={0.1} onChange={setIpca} />
+              <Field label="Documentação (% do imóvel)" help={TOOLTIP_COPY.compareDoc} value={docPercent} min={0} max={15} step={0.1} onChange={setDocPercent} />
+            </div>
+            {fgtsAmortizationActive
+              ? <small>Os depósitos de FGTS seguem a seção de amortizações extraordinárias: {fmt(fgtsContribution)}/mês com reajuste de {number.format(fgtsRaise)}% a.a., iguais nos dois cenários.</small>
+              : <div className="field-grid two">
+                <Field label="Depósito mensal de FGTS (R$)" help={TOOLTIP_COPY.compareFgtsContribution} value={compareFgtsContribution} min={0} max={20000} step={50} onChange={setCompareFgtsContribution} />
+                <Field label="Reajuste do depósito (% a.a.)" help={TOOLTIP_COPY.compareFgtsRaise} value={compareFgtsRaise} min={0} max={50} step={0.1} onChange={setCompareFgtsRaise} />
+              </div>}
+            <div className="field-grid three">
+              <Field label="Valorização conservadora (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioConservative} min={0} max={30} step={0.1} onChange={setScenarioConservative} />
+              <Field label="Valorização central (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioCentral} min={0} max={30} step={0.1} onChange={setScenarioCentral} />
+              <Field label="Valorização otimista (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioOptimistic} min={0} max={30} step={0.1} onChange={setScenarioOptimistic} />
+            </div>
+          </div>}
+        </div>
         <div className="field-grid three">
           <Field label="Prazo (meses)" help={TOOLTIP_COPY.months} value={months} min={12} max={420} step={1} onChange={setMonths} />
           <Field label="Juros nominal (% a.a.)" help={TOOLTIP_COPY.annualRate} value={rate} min={0} max={30} step={0.01} onChange={setRate} />
@@ -389,6 +471,15 @@ export default function Home() {
                 {showFgtsDetails ? 'Ocultar detalhes do FGTS' : 'Exibir detalhes do FGTS'}
               </button>
             )}
+            {rentComparisonEnabled && (
+              <button
+                className="detail-toggle"
+                onClick={() => setShowRentDetails((visible) => !visible)}
+                aria-expanded={showRentDetails}
+              >
+                {showRentDetails ? 'Ocultar comparação com aluguel' : 'Exibir comparação com aluguel'}
+              </button>
+            )}
             <button
               className="detail-toggle"
               onClick={() => setShowTableDetails((visible) => !visible)}
@@ -428,29 +519,83 @@ export default function Home() {
           </>}
           <TableHead label="Amortização real" help={TOOLTIP_COPY.realAmortization} />
           <TableHead label="Saldo devedor" help={TOOLTIP_COPY.endingBalance} />
+          {rentComparisonEnabled && showRentDetails && <>
+            <TableHead label="Aluguel" help={TOOLTIP_COPY.rentColumn} />
+            <TableHead label="Diferença investida" help={TOOLTIP_COPY.investedDifferenceColumn} />
+            <TableHead label="Carteira do locatário" help={TOOLTIP_COPY.renterPortfolioColumn} />
+            <TableHead label="FGTS do locatário" help={TOOLTIP_COPY.renterFgtsColumn} />
+            <TableHead label="Patrimônio do locatário" help={TOOLTIP_COPY.renterNetWorthColumn} />
+          </>}
           {showTotals && <TableHead label="Total boletos" help={TOOLTIP_COPY.ownTotalColumn} />}
           {showTotals && fgtsAmortizationActive && <TableHead label="Total FGTS" help={TOOLTIP_COPY.fgtsTotalColumn} />}
           {showTotals && extraAmortizationEnabled && <TableHead label="Total amortização extra" help={TOOLTIP_COPY.extraAmortizationTotalColumn} />}
           {showTotals && <TableHead label="Total geral" help={TOOLTIP_COPY.grandTotalColumn} />}
-        </tr></thead><tbody>{result.rows.map((row) => <tr key={row.n}>
-          <td><span className="installment-number"><span>{row.n}</span><InfoTooltip content={formatFinancingPeriod(row.n)} /></span></td><td>{row.due}</td>
-          {showTableDetails && <><td>{fmt(row.openingBalance)}</td><td>{fmt(row.correction)}</td><td>{fmt(row.correctedBalance)}</td><td>{fmt(row.amort)}</td><td>{fmt(row.interest)}</td><td>{fmt(row.payment)}</td><td>{fmt(row.mip)}</td><td>{fmt(row.dfi)}</td><td>{fmt(row.fee)}</td></>}
-          <td><b>{fmt(row.total)}</b></td>
-          {extraAmortizationEnabled && <td>{fmt(row.extraAmortization)}</td>}
-          {fgtsAmortizationActive && showFgtsDetails && <>
-            <td>{fmt(row.fgtsDeposit)}</td>
-            <td>{fmt(row.fgtsBalance)}</td>
-            <td>{fmt(row.fgtsAmortization)}</td>
-          </>}
-          <td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
-          {showTotals && <td>{fmt(row.cumulativeOwnDisbursed)}</td>}
-          {showTotals && fgtsAmortizationActive && <td>{fmt(row.cumulativeFgtsDisbursed)}</td>}
-          {showTotals && extraAmortizationEnabled && <td>{fmt(row.cumulativeExtraAmortization)}</td>}
-          {showTotals && <td><b>{fmt(row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed)}</b></td>}
-        </tr>)}</tbody></table></div>
+        </tr></thead><tbody>{result.rows.map((row) => {
+          const rentRow = comparison.rows[row.n - 1];
+          return <tr key={row.n}>
+            <td><span className="installment-number"><span>{row.n}</span><InfoTooltip content={formatFinancingPeriod(row.n)} /></span></td><td>{row.due}</td>
+            {showTableDetails && <><td>{fmt(row.openingBalance)}</td><td>{fmt(row.correction)}</td><td>{fmt(row.correctedBalance)}</td><td>{fmt(row.amort)}</td><td>{fmt(row.interest)}</td><td>{fmt(row.payment)}</td><td>{fmt(row.mip)}</td><td>{fmt(row.dfi)}</td><td>{fmt(row.fee)}</td></>}
+            <td><b>{fmt(row.total)}</b></td>
+            {extraAmortizationEnabled && <td>{fmt(row.extraAmortization)}</td>}
+            {fgtsAmortizationActive && showFgtsDetails && <>
+              <td>{fmt(row.fgtsDeposit)}</td>
+              <td>{fmt(row.fgtsBalance)}</td>
+              <td>{fmt(row.fgtsAmortization)}</td>
+            </>}
+            <td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
+            {rentComparisonEnabled && showRentDetails && <>
+              <td>{rentRow ? fmt(rentRow.rent) : '—'}</td>
+              <td>{rentRow ? fmt(rentRow.investedDifference) : '—'}</td>
+              <td>{rentRow ? fmt(rentRow.portfolio) : '—'}</td>
+              <td>{rentRow ? fmt(rentRow.renterFgts) : '—'}</td>
+              <td>{rentRow ? <b>{fmt(rentRow.portfolio + rentRow.renterFgts)}</b> : '—'}</td>
+            </>}
+            {showTotals && <td>{fmt(row.cumulativeOwnDisbursed)}</td>}
+            {showTotals && fgtsAmortizationActive && <td>{fmt(row.cumulativeFgtsDisbursed)}</td>}
+            {showTotals && extraAmortizationEnabled && <td>{fmt(row.cumulativeExtraAmortization)}</td>}
+            {showTotals && <td><b>{fmt(row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed)}</b></td>}
+          </tr>;
+        })}</tbody></table></div>
       </div>
       <div className="disclaimer"><b>Importante</b><p>Esta é uma simulação matemática independente, inspirada na estrutura do demonstrativo da CAIXA. Não representa proposta de crédito. TR, seguros, CET, tarifas, datas e valores reais dependem das condições contratuais e da análise do banco.</p></div>
     </section>
+
+    {rentComparisonEnabled && <section className="details">
+      <div className="details-head"><div><p className="eyebrow">Comprar ou alugar?</p><h2>Comparativo: financiar × alugar e investir</h2><p>Patrimônio de quem compra contra o de quem aluga e investe a diferença, em {formatFinancingPeriodWithMonths(comparison.horizonMonths)}. Ajuste as premissas na seção “Monte seu cenário”.</p></div></div>
+      <div className="compare-grid single">
+        <div className="card dark-card">
+          <div className="section-title light"><span>03</span><div><h2>Patrimônio no horizonte</h2><p>Locatário começa investindo {fmt(comparison.initialPortfolio)} (entrada própria + documentação de {fmt(comparison.documentationCosts)}).</p></div></div>
+          <div className="primary-result"><HelpLabel label="Patrimônio do locatário" help={TOOLTIP_COPY.compareRenterNetWorth} /><strong>{fmt(comparison.renterNetWorth)}</strong><small>carteira {fmt(comparison.portfolio)} + FGTS {fmt(comparison.renterFgts)}</small></div>
+          <div className="metrics">
+            <Metric label="Carteira investida" value={fmt(comparison.portfolio)} help={TOOLTIP_COPY.comparePortfolio} />
+            <Metric label="FGTS do locatário" value={fmt(comparison.renterFgts)} help={TOOLTIP_COPY.compareRenterFgts} />
+            <Metric label="Saldo devedor no horizonte" value={fmt(comparison.debtBalance)} help={TOOLTIP_COPY.compareDebt} />
+            <Metric label="FGTS do comprador" value={fmt(comparison.buyerFgts)} help={TOOLTIP_COPY.compareBuyerFgts} />
+            <Metric label="Saldo residual após FGTS" value={fmt(comparison.residualDebt)} help={TOOLTIP_COPY.compareResidualDebt} />
+            <Metric label="Aluguel total pago" value={fmt(comparison.totalRentPaid)} help={TOOLTIP_COPY.compareTotalRent} />
+            <Metric label="Boletos pagos no período" value={fmt(comparison.totalBuyerPaid)} help={TOOLTIP_COPY.compareTotalBuyer} />
+            <Metric label="Breakeven de valorização" value={comparison.breakevenAnnualPercent === null ? '—' : `${number.format(comparison.breakevenAnnualPercent)}% a.a.`} help={TOOLTIP_COPY.compareBreakeven} />
+          </div>
+        </div>
+      </div>
+      <div className="table-card">
+        <div className="table-toolbar"><div><strong>Cenários de valorização do imóvel</strong><span>Patrimônio do comprador = imóvel valorizado − saldo residual + FGTS remanescente após a quitação.</span></div></div>
+        <div className="table-scroll"><table><thead><tr>
+          <th>Cenário</th>
+          <th>Valorização</th>
+          <th>Valor do imóvel no horizonte</th>
+          <th>Patrimônio do comprador</th>
+          <th>Diferença vs locatário</th>
+        </tr></thead><tbody>{comparison.scenarios.map((scenario, index) => <tr key={SCENARIO_LABELS[index] ?? index}>
+          <td>{SCENARIO_LABELS[index] ?? `Cenário ${index + 1}`}</td>
+          <td>{number.format(scenario.appreciationAnnualPercent)}% a.a.</td>
+          <td>{fmt(scenario.propertyValue)}</td>
+          <td><b>{fmt(scenario.buyerNetWorth)}</b></td>
+          <td><b>{scenario.advantage >= 0 ? 'Comprar vence' : 'Alugar vence'}</b> por {fmt(Math.abs(scenario.advantage))}</td>
+        </tr>)}</tbody></table></div>
+      </div>
+      <div className="disclaimer"><b>Importante</b><p>O comparativo assume condomínio e IPTU equivalentes nos dois cenários e não considera impostos sobre os investimentos nem custos de venda do imóvel. Valorização, reajuste de aluguel e retornos são projeções ajustáveis, não garantias.</p></div>
+    </section>}
     <footer><div className="brand"><span className="mark"><img src={assetPath('/fontoura-logo.png')} alt="Fontoura" width={76} height={27} /></span><span>SimulaLar</span></div><span>Feito para comparar cenários com clareza.</span></footer>
   </main>;
 }

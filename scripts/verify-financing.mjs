@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {
+  annualToMonthlyRate,
   calculateSchedule,
   clampFgtsToEntry,
+  compareRentVsBuy,
+  composeRealAndInflation,
   computeFgtsMonthlyRate,
   entryFromPercent,
   entryPercentFromAmount,
@@ -253,5 +256,90 @@ assert.ok(Math.abs(combinedFgtsAndExtra.rows[23].fgtsAmortization - 7200) < 0.01
 assert.ok(combinedFgtsAndExtra.rows.at(-1).balance <= 0.01);
 assert.ok(combinedFgtsAndExtra.totals.fgtsAmortization > 0);
 assert.ok(combinedFgtsAndExtra.totals.extraAmortization > 0);
+
+// Conversões de taxa do comparativo comprar × alugar
+assert.equal(annualToMonthlyRate(0), 0);
+assert.ok(Math.abs(annualToMonthlyRate(5) - 0.0040741237836483535) < 1e-12);
+assert.ok(Math.abs(annualToMonthlyRate(12.682503013196977) - 0.01) < 1e-12);
+assert.ok(Math.abs(composeRealAndInflation(6, 4.5) - 10.77) < 1e-9);
+assert.equal(composeRealAndInflation(0, 0), 0);
+
+const compareBase = { property: 100000, down: 20000, months: 10, annualNominalRate: 0, trMonthlyPercent: 0, mipMonthlyPercent: 0, dfiMonthlyPercent: 0, monthlyFee: 0, firstDue: '2026-01-31' };
+const compareDefaults = {
+  horizonMonths: 12,
+  initialRent: 1000,
+  rentAnnualAdjustPercent: 0,
+  investmentAnnualRealPercent: 0,
+  ipcaAnnualPercent: 0,
+  documentationPercent: 0,
+  fgtsMonthlyYieldPercent: 0,
+  fgtsMonthlyContribution: 0,
+  fgtsAnnualRaisePercent: 0,
+  appreciationScenariosAnnualPercent: [0],
+};
+
+// Sem juros: 10 boletos de 8000; locatário paga 1000/mês e investe o resto sem rendimento
+const compareZero = compareRentVsBuy(compareBase, compareDefaults);
+assert.equal(compareZero.horizonMonths, 12);
+assert.equal(compareZero.documentationCosts, 0);
+assert.equal(compareZero.initialPortfolio, 20000);
+assert.equal(compareZero.rows.length, 12);
+assert.ok(Math.abs(compareZero.rows[0].buyerOutlay - 8000) < 0.01);
+assert.equal(compareZero.rows[11].buyerOutlay, 0);
+assert.ok(Math.abs(compareZero.portfolio - 88000) < 0.01);
+assert.equal(compareZero.renterFgts, 0);
+assert.ok(Math.abs(compareZero.renterNetWorth - 88000) < 0.01);
+assert.equal(compareZero.debtBalance, 0);
+assert.equal(compareZero.residualDebt, 0);
+assert.ok(Math.abs(compareZero.totalRentPaid - 12000) < 0.01);
+assert.ok(Math.abs(compareZero.totalBuyerPaid - 80000) < 0.01);
+assert.ok(Math.abs(compareZero.scenarios[0].propertyValue - 100000) < 0.01);
+assert.ok(Math.abs(compareZero.scenarios[0].buyerNetWorth - 100000) < 0.01);
+assert.ok(Math.abs(compareZero.scenarios[0].advantage - 12000) < 0.01);
+assert.ok(Math.abs(compareZero.breakevenAnnualPercent - -12) < 1e-9);
+
+// No breakeven, o patrimônio do comprador iguala o do locatário
+const breakevenCheck = compareRentVsBuy(compareBase, { ...compareDefaults, appreciationScenariosAnnualPercent: [compareZero.breakevenAnnualPercent] });
+assert.ok(Math.abs(breakevenCheck.scenarios[0].advantage) < 0.01);
+
+// Aluguel reajusta em degraus anuais
+const compareRentSteps = compareRentVsBuy(compareBase, { ...compareDefaults, horizonMonths: 13, rentAnnualAdjustPercent: 10 });
+assert.equal(compareRentSteps.rows[0].rent, 1000);
+assert.equal(compareRentSteps.rows[11].rent, 1000);
+assert.ok(Math.abs(compareRentSteps.rows[12].rent - 1100) < 1e-9);
+
+// Documentação entra no desembolso inicial sem abater o saldo devedor
+const compareDoc = compareRentVsBuy(compareBase, { ...compareDefaults, documentationPercent: 4.5 });
+assert.equal(compareDoc.documentationCosts, 4500);
+assert.equal(compareDoc.initialPortfolio, 24500);
+assert.equal(calculateSchedule(compareBase).financed, 80000);
+assert.ok(Math.abs(compareDoc.portfolio - 92500) < 0.01);
+
+// Carteira rende taxa mensal composta equivalente à anual
+const compareYield = compareRentVsBuy(compareBase, { ...compareDefaults, horizonMonths: 1, investmentAnnualRealPercent: 12.682503013196977 });
+assert.ok(Math.abs(compareYield.portfolio - (20000 * 1.01 + 7000)) < 1e-6);
+
+// FGTS: comprador usa parte na entrada; locatário mantém o saldo; depósitos iguais nos dois cenários
+const compareFgts = compareRentVsBuy(
+  { ...compareBase, fgts: { currentBalance: 30000, monthlyYieldPercent: 0 } },
+  { ...compareDefaults, fgtsMonthlyContribution: 100 },
+);
+assert.equal(compareFgts.initialPortfolio, 0);
+assert.ok(Math.abs(compareFgts.buyerFgts - 11200) < 0.01);
+assert.ok(Math.abs(compareFgts.renterFgts - 31200) < 0.01);
+assert.ok(Math.abs(compareFgts.buyerFgtsLeftover - 11200) < 0.01);
+assert.ok(Math.abs(compareFgts.scenarios[0].buyerNetWorth - 111200) < 0.01);
+
+// FGTS do comprador acompanha o saldo FGTS do cronograma quando o plano de amortização está ativo
+const planFinancing = {
+  ...noFeeBase,
+  fgts: { currentBalance: 0, monthlyYieldPercent: 0, extraordinaryAmortization: { monthlyContribution: 300, annualRaisePercent: 0 } },
+};
+const planSchedule = calculateSchedule(planFinancing);
+const planCompare = compareRentVsBuy(planFinancing, { ...compareDefaults, horizonMonths: 36, fgtsMonthlyContribution: 300 });
+planCompare.rows.forEach((row, index) => {
+  assert.ok(Math.abs(row.buyerFgts - planSchedule.rows[index].fgtsBalance) < 1e-6);
+  assert.ok(Math.abs(row.debtBalance - planSchedule.rows[index].balance) < 1e-6);
+});
 
 console.log('Financing checks passed.');
