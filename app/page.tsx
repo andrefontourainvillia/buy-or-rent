@@ -17,11 +17,12 @@ import {
   formatFinancingPeriod,
   formatFinancingPeriodWithMonths,
   normalizeEntryAmount,
+  projectBuyerWealth,
   shouldApplyAutomaticTr,
   TR_API_URL,
   TR_FALLBACK,
 } from './financing';
-import type { ScheduleRow } from './financing';
+import type { BuyerWealthRow, ScheduleRow } from './financing';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 });
@@ -91,15 +92,24 @@ const TOOLTIP_COPY = {
   rentColumn: 'Aluguel projetado do mês, com o reajuste anual aplicado em degraus a cada 12 meses.',
   investedDifferenceColumn: 'Boleto + amortização extra − aluguel do mês. Positivo é o que o locatário investe; negativo indica retirada da carteira.',
   renterPortfolioColumn: 'Carteira do locatário após o rendimento nominal do mês e o aporte (ou retirada) da diferença entre boleto e aluguel.',
+  renterPortfolioOpeningColumn: 'Saldo da carteira no início do mês, antes da rentabilidade e do aporte ou retirada mensal.',
+  renterPortfolioYieldColumn: 'Rendimento nominal do mês: saldo inicial da carteira × taxa mensal de investimento.',
+  renterPortfolioContributionsColumn: 'Capital líquido mantido na carteira: entrada própria + documentação + todos os aportes ou retiradas mensais. Não inclui rendimento.',
   renterFgtsColumn: 'FGTS acumulado do locatário após o rendimento e o depósito do mês.',
   renterNetWorthColumn: 'Carteira investida + FGTS do locatário ao final do mês.',
+  wealthPaidOffPercent: 'Parte do valor original do imóvel já quitada: (valor do imóvel − saldo devedor) ÷ valor do imóvel. É limitada entre 0% e 100%.',
+  wealthFgtsAvailable: 'FGTS ainda disponível após o uso na entrada e as amortizações extraordinárias. Não inclui valores de FGTS já usados para reduzir a dívida.',
+  wealthPropertyValue: 'Valor do imóvel no mês, projetado pela taxa anual do cenário com capitalização composta.',
+  wealthPaidOffValue: 'Parte quitada do imóvel, corrigida pela valorização do cenário, somada ao FGTS ainda disponível.',
+  wealthNetWorth: 'Valor atualizado do imóvel − saldo devedor corrigido pela TR + FGTS ainda disponível.',
 } as const;
 
 type TrSource = { kind: 'loading' | 'bcb' | 'fallback' | 'manual'; startDate?: string; endDate?: string };
 
 const SCENARIO_LABELS = ['Conservador', 'Central', 'Otimista'];
+const WEALTH_SCENARIO_CLASSES = ['wealth-conservative', 'wealth-central', 'wealth-optimistic'];
 
-function EvolutionChart({ rows, termLabel }: { rows: ScheduleRow[]; termLabel: string }) {
+function EvolutionChart({ rows, wealthRows, termLabel }: { rows: ScheduleRow[]; wealthRows: BuyerWealthRow[]; termLabel: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -116,6 +126,11 @@ function EvolutionChart({ rows, termLabel }: { rows: ScheduleRow[]; termLabel: s
     const height = box.height;
     const padding = { left: 24, right: 18, top: 20, bottom: 28 };
     const maximumBoleto = Math.max(rows[0].total, 1);
+    const maximumBalanceAndWealth = Math.max(
+      rows[0].balance,
+      ...wealthRows.flatMap((wealthRow) => wealthRow.scenarios.map((scenario) => scenario.buyerNetWorth)),
+      1,
+    );
     context.clearRect(0, 0, width, height);
     context.strokeStyle = '#d9e4e7';
     context.lineWidth = 1;
@@ -126,67 +141,74 @@ function EvolutionChart({ rows, termLabel }: { rows: ScheduleRow[]; termLabel: s
       context.lineTo(width - padding.right, y);
       context.stroke();
     });
-    const drawLine = (key: 'total' | 'balance', color: string, scale: number) => {
+    const drawLine = (values: number[], color: string, scale: number) => {
       context.strokeStyle = color;
       context.lineWidth = 3;
       context.lineJoin = 'round';
       context.beginPath();
-      rows.forEach((row, index) => {
+      values.forEach((value, index) => {
         const x = padding.left + (index / (rows.length - 1 || 1)) * (width - padding.left - padding.right);
-        const y = padding.top + (1 - row[key] / scale) * (height - padding.top - padding.bottom);
+        const y = padding.top + (1 - value / scale) * (height - padding.top - padding.bottom);
         if (index) context.lineTo(x, y);
         else context.moveTo(x, y);
       });
       context.stroke();
     };
-    drawLine('total', '#e8890c', maximumBoleto);
-    drawLine('balance', '#0875b9', Math.max(rows[0].balance, 1));
+    drawLine(rows.map((row) => row.total), '#e8890c', maximumBoleto);
+    drawLine(rows.map((row) => row.balance), '#0875b9', maximumBalanceAndWealth);
+    ['#63b4d9', '#56b870', '#dc6d8b'].forEach((color, index) => {
+      drawLine(wealthRows.map((wealthRow) => wealthRow.scenarios[index]?.buyerNetWorth ?? 0), color, maximumBalanceAndWealth);
+    });
     context.fillStyle = '#78909c';
     context.font = '11px Arial';
     context.fillText('início', padding.left, height - 8);
     context.textAlign = 'right';
     context.fillText(termLabel, width - padding.right, height - 8);
     context.textAlign = 'left';
-  }, [rows, termLabel]);
+  }, [rows, wealthRows, termLabel]);
 
-  return <canvas ref={ref} className="chart" aria-label="Gráfico da queda do boleto e do saldo devedor ao longo do prazo" />;
+  return <canvas ref={ref} className="chart" aria-label="Gráfico do boleto, saldo devedor e patrimônio líquido do comprador nos três cenários ao longo do prazo" />;
 }
 
 export default function Home() {
   const [property, setProperty] = useState(650000);
   const [down, setDown] = useState(130000);
   const [months, setMonths] = useState(420);
-  const [rate, setRate] = useState(10.74);
-  const [tr, setTr] = useState(TR_FALLBACK.monthlyPercent);
+  const [rate, setRate] = useState(11.19);
+  const [tr, setTr] = useState(0.1687);
   const [mipRate, setMipRate] = useState(0.01536);
   const [dfiRate, setDfiRate] = useState(0.013);
   const [fee, setFee] = useState(25);
   const [firstDue, setFirstDue] = useState('2026-09-28');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(true);
   const [showTableDetails, setShowTableDetails] = useState(false);
   const [showFgtsDetails, setShowFgtsDetails] = useState(false);
+  const [showConservativeWealth, setShowConservativeWealth] = useState(false);
+  const [showCentralWealth, setShowCentralWealth] = useState(false);
+  const [showOptimisticWealth, setShowOptimisticWealth] = useState(false);
   const [showTotals, setShowTotals] = useState(false);
   const [trSource, setTrSource] = useState<TrSource>({ kind: 'loading', startDate: TR_FALLBACK.startDate, endDate: TR_FALLBACK.endDate });
   const trWasEdited = useRef(false);
-  const [fgtsEnabled, setFgtsEnabled] = useState(false);
-  const [fgtsBalance, setFgtsBalance] = useState(0);
+  const [fgtsEnabled, setFgtsEnabled] = useState(true);
+  const [fgtsBalance, setFgtsBalance] = useState(71533.26);
   const [fgtsYieldOverride, setFgtsYieldOverride] = useState<number | null>(null);
-  const [fgtsAmortizationEnabled, setFgtsAmortizationEnabled] = useState(false);
-  const [fgtsContribution, setFgtsContribution] = useState(300);
+  const [fgtsAmortizationEnabled, setFgtsAmortizationEnabled] = useState(true);
+  const [fgtsContribution, setFgtsContribution] = useState(2500);
   const [fgtsRaise, setFgtsRaise] = useState(5);
   const [extraAmortizationEnabled, setExtraAmortizationEnabled] = useState(false);
-  const [rentComparisonEnabled, setRentComparisonEnabled] = useState(false);
+  const [rentComparisonEnabled, setRentComparisonEnabled] = useState(true);
   const [showRentDetails, setShowRentDetails] = useState(false);
-  const [rentValue, setRentValue] = useState(3500);
-  const [rentRaise, setRentRaise] = useState(7);
+  const [showRenterPortfolioDetails, setShowRenterPortfolioDetails] = useState(false);
+  const [rentValue, setRentValue] = useState(3861.68);
+  const [rentRaise, setRentRaise] = useState(6);
   const [compareHorizon, setCompareHorizon] = useState(120);
   const [investReal, setInvestReal] = useState(6);
   const [ipca, setIpca] = useState(4.5);
-  const [docPercent, setDocPercent] = useState(4.5);
+  const [docPercent, setDocPercent] = useState(4);
   const [compareFgtsContribution, setCompareFgtsContribution] = useState(0);
   const [compareFgtsRaise, setCompareFgtsRaise] = useState(5);
-  const [scenarioConservative, setScenarioConservative] = useState(3);
-  const [scenarioCentral, setScenarioCentral] = useState(5);
+  const [scenarioConservative, setScenarioConservative] = useState(5);
+  const [scenarioCentral, setScenarioCentral] = useState(6);
   const [scenarioOptimistic, setScenarioOptimistic] = useState(7);
 
   useEffect(() => {
@@ -255,8 +277,15 @@ export default function Home() {
     extraAmortization: extraAmortizationEnabled ? { payLastInstallmentMonthly: true } : undefined,
   }), [property, down, months, rate, tr, mipRate, dfiRate, fee, firstDue, fgtsEnabled, fgtsBalance, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise, extraAmortizationEnabled]);
   const result = useMemo(() => calculateSchedule(financingInputs), [financingInputs]);
+  const appreciationScenarios = useMemo(
+    () => [scenarioConservative, scenarioCentral, scenarioOptimistic],
+    [scenarioConservative, scenarioCentral, scenarioOptimistic],
+  );
+  const wealthScenarioVisibility = [showConservativeWealth, showCentralWealth, showOptimisticWealth];
+  const showAnyWealthDetails = wealthScenarioVisibility.some(Boolean);
+  const comparisonHorizon = Math.max(compareHorizon, result.term);
   const comparison = useMemo(() => compareRentVsBuy(financingInputs, {
-    horizonMonths: compareHorizon,
+    horizonMonths: comparisonHorizon,
     initialRent: rentValue,
     rentAnnualAdjustPercent: rentRaise,
     investmentAnnualRealPercent: investReal,
@@ -265,12 +294,19 @@ export default function Home() {
     fgtsMonthlyYieldPercent: fgtsYield,
     fgtsMonthlyContribution: fgtsAmortizationActive ? fgtsContribution : compareFgtsContribution,
     fgtsAnnualRaisePercent: fgtsAmortizationActive ? fgtsRaise : compareFgtsRaise,
-    appreciationScenariosAnnualPercent: [scenarioConservative, scenarioCentral, scenarioOptimistic],
-  }), [financingInputs, compareHorizon, rentValue, rentRaise, investReal, ipca, docPercent, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise, compareFgtsContribution, compareFgtsRaise, scenarioConservative, scenarioCentral, scenarioOptimistic]);
+    appreciationScenariosAnnualPercent: appreciationScenarios,
+  }), [financingInputs, comparisonHorizon, rentValue, rentRaise, investReal, ipca, docPercent, fgtsYield, fgtsAmortizationActive, fgtsContribution, fgtsRaise, compareFgtsContribution, compareFgtsRaise, appreciationScenarios]);
   const first = result.rows[0];
   const last = result.rows.at(-1);
   const extraAmortizationFirstAmount = first?.extraAmortization ?? 0;
   const fgtsEntryPortion = fgtsEnabled ? clampFgtsToEntry(result.entry, fgtsBalance) : 0;
+  const wealthRows = useMemo(() => projectBuyerWealth(
+    result.price,
+    result.rows,
+    appreciationScenarios,
+    fgtsEnabled ? Math.max(0, fgtsBalance - fgtsEntryPortion) : 0,
+  ), [result, appreciationScenarios, fgtsEnabled, fgtsBalance, fgtsEntryPortion]);
+  const finalWealth = wealthRows.at(-1);
   const anticipatedMonths = (fgtsAmortizationActive || extraAmortizationEnabled) ? months - result.term : 0;
   const hasFgtsEntryPortion = fgtsEntryPortion > 0;
   const hasRecalculatedTerm = anticipatedMonths > 0;
@@ -312,10 +348,12 @@ export default function Home() {
       + (extraAmortizationEnabled ? ';Amortização extra' : '')
       + (fgtsAmortizationActive ? ';Depósito FGTS;Saldo FGTS;Amortização FGTS' : '')
       + ';Amortização real;Saldo devedor final'
-      + (rentComparisonEnabled ? ';Aluguel;Diferença investida;Carteira locatário;FGTS locatário;Patrimônio locatário' : '')
+      + ';Percentual quitado;FGTS disponível;Valor do imóvel conservador;Valor do imóvel central;Valor do imóvel otimista;Fração quitada valorizada + FGTS conservadora;Fração quitada valorizada + FGTS central;Fração quitada valorizada + FGTS otimista;Patrimônio líquido conservador;Patrimônio líquido central;Patrimônio líquido otimista'
+      + (rentComparisonEnabled ? ';Aluguel;Aporte ou retirada;Saldo anterior da carteira;Rendimento da carteira;Capital líquido na carteira;Carteira locatário;FGTS locatário;Patrimônio locatário' : '')
       + (showTotals ? ';Total boletos' + (fgtsAmortizationActive ? ';Total FGTS' : '') + (extraAmortizationEnabled ? ';Total amortização extra' : '') + ';Total geral' : '');
     const lines = result.rows.map((row) => {
       const rentRow = comparison.rows[row.n - 1];
+      const wealthRow = wealthRows[row.n - 1];
       return [
         row.n,
         row.due,
@@ -334,7 +372,12 @@ export default function Home() {
         ...(fgtsAmortizationActive ? [row.fgtsDeposit, row.fgtsBalance, row.fgtsAmortization] : []),
         row.realAmortization,
         row.balance,
-        ...(rentComparisonEnabled ? [rentRow?.rent ?? 0, rentRow?.investedDifference ?? 0, rentRow?.portfolio ?? 0, rentRow?.renterFgts ?? 0, rentRow ? rentRow.portfolio + rentRow.renterFgts : 0] : []),
+        wealthRow?.scenarios[0]?.paidOffPercent ?? 0,
+        wealthRow?.fgtsAvailable ?? 0,
+        ...wealthRow?.scenarios.map((scenario) => scenario.propertyValue) ?? [0, 0, 0],
+        ...wealthRow?.scenarios.map((scenario) => scenario.paidOffValue) ?? [0, 0, 0],
+        ...wealthRow?.scenarios.map((scenario) => scenario.buyerNetWorth) ?? [0, 0, 0],
+        ...(rentComparisonEnabled ? [rentRow?.rent ?? 0, rentRow?.investedDifference ?? 0, rentRow?.portfolioOpeningBalance ?? 0, rentRow?.portfolioYield ?? 0, rentRow?.portfolioNetContributions ?? 0, rentRow?.portfolio ?? 0, rentRow?.renterFgts ?? 0, rentRow ? rentRow.portfolio + rentRow.renterFgts : 0] : []),
         ...(showTotals ? [row.cumulativeOwnDisbursed, ...(fgtsAmortizationActive ? [row.cumulativeFgtsDisbursed] : []), ...(extraAmortizationEnabled ? [row.cumulativeExtraAmortization] : []), row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed] : []),
       ].map((value, index) => index < 2 ? value : Number(value).toFixed(index === 3 ? 4 : 2).replace('.', ',')).join(';');
     });
@@ -375,12 +418,20 @@ export default function Home() {
         </div>
         <label className="fgts-toggle"><input type="checkbox" checked={extraAmortizationEnabled} onChange={(event) => setExtraAmortizationEnabled(event.target.checked)} /><span>Amortizar saldo devedor todo mês com o valor da última parcela{extraAmortizationEnabled ? ` (1º mês: ${fmt(extraAmortizationFirstAmount)})` : ''}</span><InfoTooltip content={TOOLTIP_COPY.extraAmortizationEnable} /></label>
         <div className="fgts-panel">
+          <div className="field-title"><b>Projeção patrimonial</b><InfoTooltip content={TOOLTIP_COPY.wealthNetWorth} /></div>
+          <div className="field-grid three">
+            <Field label="Valorização conservadora (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioConservative} min={0} max={30} step={0.1} onChange={setScenarioConservative} />
+            <Field label="Valorização central (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioCentral} min={0} max={30} step={0.1} onChange={setScenarioCentral} />
+            <Field label="Valorização otimista (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioOptimistic} min={0} max={30} step={0.1} onChange={setScenarioOptimistic} />
+          </div>
+        </div>
+        <div className="fgts-panel">
           <label className="fgts-toggle"><input type="checkbox" checked={rentComparisonEnabled} onChange={(event) => setRentComparisonEnabled(event.target.checked)} /><span>Comparar com aluguel</span><InfoTooltip content={TOOLTIP_COPY.compareEnable} /></label>
           {rentComparisonEnabled && <div className="fgts-fields">
             <div className="field-grid three">
               <Field label="Aluguel mensal (R$)" help={TOOLTIP_COPY.compareRent} value={rentValue} min={0} max={50000} step={50} onChange={setRentValue} />
               <Field label="Reajuste do aluguel (% a.a.)" help={TOOLTIP_COPY.compareRentRaise} value={rentRaise} min={0} max={30} step={0.1} onChange={setRentRaise} />
-              <Field label="Horizonte (meses)" help={TOOLTIP_COPY.compareHorizon} value={compareHorizon} min={12} max={480} step={12} onChange={setCompareHorizon} />
+              <Field label="Horizonte da comparação (meses)" help={TOOLTIP_COPY.compareHorizon} value={compareHorizon} min={12} max={480} step={12} onChange={setCompareHorizon} />
               <Field label="Retorno real (% a.a.)" help={TOOLTIP_COPY.compareInvestReal} value={investReal} min={0} max={20} step={0.1} onChange={setInvestReal} />
               <Field label="IPCA projetado (% a.a.)" help={TOOLTIP_COPY.compareIpca} value={ipca} min={0} max={20} step={0.1} onChange={setIpca} />
               <Field label="Documentação (% do imóvel)" help={TOOLTIP_COPY.compareDoc} value={docPercent} min={0} max={15} step={0.1} onChange={setDocPercent} />
@@ -391,11 +442,6 @@ export default function Home() {
                 <Field label="Depósito mensal de FGTS (R$)" help={TOOLTIP_COPY.compareFgtsContribution} value={compareFgtsContribution} min={0} max={20000} step={50} onChange={setCompareFgtsContribution} />
                 <Field label="Reajuste do depósito (% a.a.)" help={TOOLTIP_COPY.compareFgtsRaise} value={compareFgtsRaise} min={0} max={50} step={0.1} onChange={setCompareFgtsRaise} />
               </div>}
-            <div className="field-grid three">
-              <Field label="Valorização conservadora (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioConservative} min={0} max={30} step={0.1} onChange={setScenarioConservative} />
-              <Field label="Valorização central (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioCentral} min={0} max={30} step={0.1} onChange={setScenarioCentral} />
-              <Field label="Valorização otimista (% a.a.)" help={TOOLTIP_COPY.compareScenario} value={scenarioOptimistic} min={0} max={30} step={0.1} onChange={setScenarioOptimistic} />
-            </div>
           </div>}
         </div>
         <div className="field-grid three">
@@ -440,7 +486,14 @@ export default function Home() {
             {extraAmortizationEnabled && <li><span>Amortização extra mensal</span><b>{fmt(result.totals.extraAmortization)}</b></li>}
           </ul>
         </div>
-        <div className="legend"><span><i className="orange" />Boleto</span><span><i className="blue" />Saldo devedor</span></div><EvolutionChart rows={result.rows} termLabel={termLabel} />
+        {finalWealth && <div className="wealth-summary">
+          <HelpLabel label="Patrimônio na quitação" help={TOOLTIP_COPY.wealthNetWorth} />
+          <div className="wealth-summary-meta"><span>{number.format(finalWealth.scenarios[0]?.paidOffPercent * 100 ?? 0)}% quitado</span><span>FGTS disponível: {fmt(finalWealth.fgtsAvailable)}</span></div>
+          {finalWealth.scenarios.map((scenario, index) => <div className="wealth-summary-row" key={SCENARIO_LABELS[index]}>
+            <b>{SCENARIO_LABELS[index]}</b><span>Imóvel {fmt(scenario.propertyValue)}</span><span>Fração quitada {fmt(scenario.paidOffValue)}</span><strong>{fmt(scenario.buyerNetWorth)}</strong>
+          </div>)}
+        </div>}
+        <div className="legend"><span><i className="orange" />Boleto</span><span><i className="blue" />Saldo devedor</span><span><i className="conservative" />Patrimônio conservador</span><span><i className="central" />Patrimônio central</span><span><i className="optimistic" />Patrimônio otimista</span></div><EvolutionChart rows={result.rows} wealthRows={wealthRows} termLabel={termLabel} />
       </div>
     </section>
 
@@ -462,98 +515,144 @@ export default function Home() {
             <span>Use os ícones de informação para entender cada cálculo.</span>
           </div>
           <div className="table-actions">
+            <button
+              className="detail-toggle purchase-toggle boleto-toggle"
+              onClick={() => setShowTableDetails((visible) => !visible)}
+              aria-expanded={showTableDetails}
+            >
+              {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
+            </button>
             {fgtsAmortizationActive && (
               <button
-                className="detail-toggle"
+                className="detail-toggle purchase-toggle fgts-toggle"
                 onClick={() => setShowFgtsDetails((visible) => !visible)}
                 aria-expanded={showFgtsDetails}
               >
                 {showFgtsDetails ? 'Ocultar detalhes do FGTS' : 'Exibir detalhes do FGTS'}
               </button>
             )}
+            <button
+              className="detail-toggle purchase-toggle totals-toggle"
+              onClick={() => setShowTotals((visible) => !visible)}
+              aria-expanded={showTotals}
+            >
+              {showTotals ? 'Ocultar totalizadores' : 'Exibir totalizadores'}
+            </button>
+            <button className="detail-toggle wealth-toggle conservative" onClick={() => setShowConservativeWealth((visible) => !visible)} aria-expanded={showConservativeWealth}>
+              Análise conservadora ({number.format(scenarioConservative)}% a.a.)
+            </button>
+            <button className="detail-toggle wealth-toggle central" onClick={() => setShowCentralWealth((visible) => !visible)} aria-expanded={showCentralWealth}>
+              Análise central ({number.format(scenarioCentral)}% a.a.)
+            </button>
+            <button className="detail-toggle wealth-toggle optimistic" onClick={() => setShowOptimisticWealth((visible) => !visible)} aria-expanded={showOptimisticWealth}>
+              Análise otimista ({number.format(scenarioOptimistic)}% a.a.)
+            </button>
             {rentComparisonEnabled && (
               <button
-                className="detail-toggle"
+                className="detail-toggle rent-toggle"
                 onClick={() => setShowRentDetails((visible) => !visible)}
                 aria-expanded={showRentDetails}
               >
                 {showRentDetails ? 'Ocultar comparação com aluguel' : 'Exibir comparação com aluguel'}
               </button>
             )}
-            <button
-              className="detail-toggle"
-              onClick={() => setShowTableDetails((visible) => !visible)}
-              aria-expanded={showTableDetails}
-            >
-              {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
-            </button>
-            <button
-              className="detail-toggle"
-              onClick={() => setShowTotals((visible) => !visible)}
-              aria-expanded={showTotals}
-            >
-              {showTotals ? 'Ocultar totalizadores' : 'Exibir totalizadores'}
-            </button>
+            {rentComparisonEnabled && (
+              <button
+                className="detail-toggle portfolio-toggle"
+                onClick={() => {
+                  setShowRentDetails(true);
+                  setShowRenterPortfolioDetails((visible) => !visible);
+                }}
+                aria-expanded={showRenterPortfolioDetails}
+              >
+                {showRenterPortfolioDetails ? 'Ocultar detalhes da carteira' : 'Detalhar carteira do locatário'}
+              </button>
+            )}
           </div>
         </div>
-        <div className="table-scroll"><table className={showTableDetails ? 'is-detailed' : ''}><thead><tr>
+        <div className="table-scroll"><table className={`${showTableDetails ? 'is-detailed ' : ''}${rentComparisonEnabled && showRentDetails ? 'is-comparison ' : ''}${showAnyWealthDetails ? 'is-wealth' : ''}`}><thead><tr>
           <TableHead label="Nº" help={TOOLTIP_COPY.installmentNumber} />
           <TableHead label="Vencimento" help={TOOLTIP_COPY.dueDate} />
           {showTableDetails && <>
-            <TableHead label="Saldo anterior" help={TOOLTIP_COPY.openingBalance} />
-            <TableHead label="Correção TR" help={TOOLTIP_COPY.trCorrection} />
-            <TableHead label="Saldo corrigido" help={TOOLTIP_COPY.correctedBalance} />
-            <TableHead label="Amortização" help={TOOLTIP_COPY.amortization} />
-            <TableHead label="Juros" help={TOOLTIP_COPY.interest} />
-            <TableHead label="Prestação" help={TOOLTIP_COPY.payment} />
-            <TableHead label="MIP" help={TOOLTIP_COPY.mip} />
-            <TableHead label="DFI" help={TOOLTIP_COPY.dfi} />
-            <TableHead label="Tarifa" help={TOOLTIP_COPY.monthlyFee} />
+            <TableHead className="boleto-column" label="Saldo anterior" help={TOOLTIP_COPY.openingBalance} />
+            <TableHead className="boleto-column" label="Correção TR" help={TOOLTIP_COPY.trCorrection} />
+            <TableHead className="boleto-column" label="Saldo corrigido" help={TOOLTIP_COPY.correctedBalance} />
+            <TableHead className="boleto-column" label="Amortização" help={TOOLTIP_COPY.amortization} />
+            <TableHead className="boleto-column" label="Juros" help={TOOLTIP_COPY.interest} />
+            <TableHead className="boleto-column" label="Prestação" help={TOOLTIP_COPY.payment} />
+            <TableHead className="boleto-column" label="MIP" help={TOOLTIP_COPY.mip} />
+            <TableHead className="boleto-column" label="DFI" help={TOOLTIP_COPY.dfi} />
+            <TableHead className="boleto-column" label="Tarifa" help={TOOLTIP_COPY.monthlyFee} />
           </>}
           <TableHead label="Boleto" help={TOOLTIP_COPY.boleto} />
           {extraAmortizationEnabled && <TableHead label="Amortização extra" help={TOOLTIP_COPY.extraAmortizationColumn} />}
           {fgtsAmortizationActive && showFgtsDetails && <>
-            <TableHead label="Depósito FGTS" help={TOOLTIP_COPY.fgtsDepositColumn} />
-            <TableHead label="Saldo FGTS" help={TOOLTIP_COPY.fgtsBalanceColumn} />
-            <TableHead label="Amortização FGTS" help={TOOLTIP_COPY.fgtsAmortizationColumn} />
+            <TableHead className="fgts-column" label="Depósito FGTS" help={TOOLTIP_COPY.fgtsDepositColumn} />
+            <TableHead className="fgts-column" label="Saldo FGTS" help={TOOLTIP_COPY.fgtsBalanceColumn} />
+            <TableHead className="fgts-column" label="Amortização FGTS" help={TOOLTIP_COPY.fgtsAmortizationColumn} />
           </>}
           <TableHead label="Amortização real" help={TOOLTIP_COPY.realAmortization} />
           <TableHead label="Saldo devedor" help={TOOLTIP_COPY.endingBalance} />
-          {rentComparisonEnabled && showRentDetails && <>
-            <TableHead label="Aluguel" help={TOOLTIP_COPY.rentColumn} />
-            <TableHead label="Diferença investida" help={TOOLTIP_COPY.investedDifferenceColumn} />
-            <TableHead label="Carteira do locatário" help={TOOLTIP_COPY.renterPortfolioColumn} />
-            <TableHead label="FGTS do locatário" help={TOOLTIP_COPY.renterFgtsColumn} />
-            <TableHead label="Patrimônio do locatário" help={TOOLTIP_COPY.renterNetWorthColumn} />
+          {showTotals && <TableHead className="totals-column" label="Total boletos" help={TOOLTIP_COPY.ownTotalColumn} />}
+          {showTotals && fgtsAmortizationActive && <TableHead className="totals-column" label="Total FGTS" help={TOOLTIP_COPY.fgtsTotalColumn} />}
+          {showTotals && extraAmortizationEnabled && <TableHead className="totals-column" label="Total amortização extra" help={TOOLTIP_COPY.extraAmortizationTotalColumn} />}
+          {showTotals && <TableHead className="totals-column" label="Total geral" help={TOOLTIP_COPY.grandTotalColumn} />}
+          {showAnyWealthDetails && <>
+            <TableHead className="wealth-column wealth-column-start" label="Percentual quitado" help={TOOLTIP_COPY.wealthPaidOffPercent} />
+            <TableHead className="wealth-column" label="FGTS disponível" help={TOOLTIP_COPY.wealthFgtsAvailable} />
+            {SCENARIO_LABELS.map((label, index) => wealthScenarioVisibility[index] && <TableHead className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`property-${label}`} label={`Imóvel ${label.toLowerCase()}`} help={TOOLTIP_COPY.wealthPropertyValue} />)}
+            {SCENARIO_LABELS.map((label, index) => wealthScenarioVisibility[index] && <TableHead className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`paid-${label}`} label={`Fração quitada ${label.toLowerCase()}`} help={TOOLTIP_COPY.wealthPaidOffValue} />)}
+            {SCENARIO_LABELS.map((label, index) => wealthScenarioVisibility[index] && <TableHead className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`net-${label}`} label={`Patrimônio ${label.toLowerCase()}`} help={TOOLTIP_COPY.wealthNetWorth} />)}
           </>}
-          {showTotals && <TableHead label="Total boletos" help={TOOLTIP_COPY.ownTotalColumn} />}
-          {showTotals && fgtsAmortizationActive && <TableHead label="Total FGTS" help={TOOLTIP_COPY.fgtsTotalColumn} />}
-          {showTotals && extraAmortizationEnabled && <TableHead label="Total amortização extra" help={TOOLTIP_COPY.extraAmortizationTotalColumn} />}
-          {showTotals && <TableHead label="Total geral" help={TOOLTIP_COPY.grandTotalColumn} />}
+          {rentComparisonEnabled && showRentDetails && <>
+            <TableHead className="rent-column rent-column-start" label="Aluguel" help={TOOLTIP_COPY.rentColumn} />
+            <TableHead className="rent-column" label="Aporte ou retirada" help={TOOLTIP_COPY.investedDifferenceColumn} />
+            {showRenterPortfolioDetails && <>
+              <TableHead className="rent-column portfolio-detail-column" label="Saldo anterior da carteira" help={TOOLTIP_COPY.renterPortfolioOpeningColumn} />
+              <TableHead className="rent-column portfolio-detail-column" label="Capital líquido na carteira" help={TOOLTIP_COPY.renterPortfolioContributionsColumn} />
+              <TableHead className="rent-column portfolio-detail-column" label="Rendimento da carteira" help={TOOLTIP_COPY.renterPortfolioYieldColumn} />
+            </>}
+            <TableHead className="rent-column" label="Carteira do locatário" help={TOOLTIP_COPY.renterPortfolioColumn} />
+            <TableHead className="rent-column" label="FGTS do locatário" help={TOOLTIP_COPY.renterFgtsColumn} />
+            <TableHead className="rent-column" label="Patrimônio do locatário" help={TOOLTIP_COPY.renterNetWorthColumn} />
+          </>}
         </tr></thead><tbody>{result.rows.map((row) => {
           const rentRow = comparison.rows[row.n - 1];
+          const wealthRow = wealthRows[row.n - 1];
           return <tr key={row.n}>
             <td><span className="installment-number"><span>{row.n}</span><InfoTooltip content={formatFinancingPeriod(row.n)} /></span></td><td>{row.due}</td>
-            {showTableDetails && <><td>{fmt(row.openingBalance)}</td><td>{fmt(row.correction)}</td><td>{fmt(row.correctedBalance)}</td><td>{fmt(row.amort)}</td><td>{fmt(row.interest)}</td><td>{fmt(row.payment)}</td><td>{fmt(row.mip)}</td><td>{fmt(row.dfi)}</td><td>{fmt(row.fee)}</td></>}
+            {showTableDetails && <><td className="boleto-column">{fmt(row.openingBalance)}</td><td className="boleto-column">{fmt(row.correction)}</td><td className="boleto-column">{fmt(row.correctedBalance)}</td><td className="boleto-column">{fmt(row.amort)}</td><td className="boleto-column">{fmt(row.interest)}</td><td className="boleto-column">{fmt(row.payment)}</td><td className="boleto-column">{fmt(row.mip)}</td><td className="boleto-column">{fmt(row.dfi)}</td><td className="boleto-column">{fmt(row.fee)}</td></>}
             <td><b>{fmt(row.total)}</b></td>
             {extraAmortizationEnabled && <td>{fmt(row.extraAmortization)}</td>}
             {fgtsAmortizationActive && showFgtsDetails && <>
-              <td>{fmt(row.fgtsDeposit)}</td>
-              <td>{fmt(row.fgtsBalance)}</td>
-              <td>{fmt(row.fgtsAmortization)}</td>
+              <td className="fgts-column">{fmt(row.fgtsDeposit)}</td>
+              <td className="fgts-column">{fmt(row.fgtsBalance)}</td>
+              <td className="fgts-column">{fmt(row.fgtsAmortization)}</td>
             </>}
             <td>{fmt(row.realAmortization)}</td><td>{fmt(row.balance)}</td>
-            {rentComparisonEnabled && showRentDetails && <>
-              <td>{rentRow ? fmt(rentRow.rent) : '—'}</td>
-              <td>{rentRow ? fmt(rentRow.investedDifference) : '—'}</td>
-              <td>{rentRow ? fmt(rentRow.portfolio) : '—'}</td>
-              <td>{rentRow ? fmt(rentRow.renterFgts) : '—'}</td>
-              <td>{rentRow ? <b>{fmt(rentRow.portfolio + rentRow.renterFgts)}</b> : '—'}</td>
+            {showTotals && <td className="totals-column">{fmt(row.cumulativeOwnDisbursed)}</td>}
+            {showTotals && fgtsAmortizationActive && <td className="totals-column">{fmt(row.cumulativeFgtsDisbursed)}</td>}
+            {showTotals && extraAmortizationEnabled && <td className="totals-column">{fmt(row.cumulativeExtraAmortization)}</td>}
+            {showTotals && <td className="totals-column"><b>{fmt(row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed)}</b></td>}
+            {showAnyWealthDetails && <>
+              <td className="wealth-column wealth-column-start">{number.format((wealthRow?.scenarios[0]?.paidOffPercent ?? 0) * 100)}%</td>
+              <td className="wealth-column">{fmt(wealthRow?.fgtsAvailable ?? 0)}</td>
+              {wealthRow?.scenarios.map((scenario, index) => wealthScenarioVisibility[index] && <td className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`property-${scenario.appreciationAnnualPercent}`}>{fmt(scenario.propertyValue)}</td>)}
+              {wealthRow?.scenarios.map((scenario, index) => wealthScenarioVisibility[index] && <td className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`paid-${scenario.appreciationAnnualPercent}`}>{fmt(scenario.paidOffValue)}</td>)}
+              {wealthRow?.scenarios.map((scenario, index) => wealthScenarioVisibility[index] && <td className={`wealth-column ${WEALTH_SCENARIO_CLASSES[index]}`} key={`net-${scenario.appreciationAnnualPercent}`}><b>{fmt(scenario.buyerNetWorth)}</b></td>)}
             </>}
-            {showTotals && <td>{fmt(row.cumulativeOwnDisbursed)}</td>}
-            {showTotals && fgtsAmortizationActive && <td>{fmt(row.cumulativeFgtsDisbursed)}</td>}
-            {showTotals && extraAmortizationEnabled && <td>{fmt(row.cumulativeExtraAmortization)}</td>}
-            {showTotals && <td><b>{fmt(row.cumulativeOwnDisbursed + row.cumulativeFgtsDisbursed)}</b></td>}
+            {rentComparisonEnabled && showRentDetails && <>
+              <td className="rent-column rent-column-start">{rentRow ? fmt(rentRow.rent) : '—'}</td>
+              <td className="rent-column">{rentRow ? fmt(rentRow.investedDifference) : '—'}</td>
+              {showRenterPortfolioDetails && <>
+                <td className="rent-column portfolio-detail-column">{rentRow ? fmt(rentRow.portfolioOpeningBalance) : '—'}</td>
+                <td className="rent-column portfolio-detail-column">{rentRow ? fmt(rentRow.portfolioNetContributions) : '—'}</td>
+                <td className="rent-column portfolio-detail-column">{rentRow ? fmt(rentRow.portfolioYield) : '—'}</td>
+              </>}
+              <td className="rent-column">{rentRow ? fmt(rentRow.portfolio) : '—'}</td>
+              <td className="rent-column">{rentRow ? fmt(rentRow.renterFgts) : '—'}</td>
+              <td className="rent-column">{rentRow ? <b>{fmt(rentRow.portfolio + rentRow.renterFgts)}</b> : '—'}</td>
+            </>}
           </tr>;
         })}</tbody></table></div>
       </div>
@@ -568,6 +667,8 @@ export default function Home() {
           <div className="primary-result"><HelpLabel label="Patrimônio do locatário" help={TOOLTIP_COPY.compareRenterNetWorth} /><strong>{fmt(comparison.renterNetWorth)}</strong><small>carteira {fmt(comparison.portfolio)} + FGTS {fmt(comparison.renterFgts)}</small></div>
           <div className="metrics">
             <Metric label="Carteira investida" value={fmt(comparison.portfolio)} help={TOOLTIP_COPY.comparePortfolio} />
+            <Metric label="Capital líquido na carteira" value={fmt(comparison.rows.at(-1)?.portfolioNetContributions ?? comparison.initialPortfolio)} help={TOOLTIP_COPY.renterPortfolioContributionsColumn} />
+            <Metric label="Rendimento acumulado da carteira" value={fmt(comparison.portfolio - (comparison.rows.at(-1)?.portfolioNetContributions ?? comparison.initialPortfolio))} help={TOOLTIP_COPY.renterPortfolioYieldColumn} />
             <Metric label="FGTS do locatário" value={fmt(comparison.renterFgts)} help={TOOLTIP_COPY.compareRenterFgts} />
             <Metric label="Saldo devedor no horizonte" value={fmt(comparison.debtBalance)} help={TOOLTIP_COPY.compareDebt} />
             <Metric label="FGTS do comprador" value={fmt(comparison.buyerFgts)} help={TOOLTIP_COPY.compareBuyerFgts} />
@@ -682,6 +783,6 @@ function Metric({ label, value, help }: { label: string; value: string; help: st
   return <div className="metric"><HelpLabel label={label} help={help} /><b>{value}</b></div>;
 }
 
-function TableHead({ label, help }: { label: string; help: string }) {
-  return <th><HelpLabel label={label} help={help} /></th>;
+function TableHead({ className, label, help }: { className?: string; label: string; help: string }) {
+  return <th className={className}><HelpLabel label={label} help={help} /></th>;
 }

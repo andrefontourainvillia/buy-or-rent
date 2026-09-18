@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   annualToMonthlyRate,
+  calculateBuyerWealthSnapshot,
   calculateSchedule,
   clampFgtsToEntry,
   compareRentVsBuy,
@@ -15,10 +16,23 @@ import {
   formatFinancingPeriodWithMonths,
   normalizeEntryAmount,
   parseBcbTrPayload,
+  projectBuyerWealth,
   shouldApplyAutomaticTr,
   TR_API_URL,
   TR_FALLBACK,
 } from '../app/financing.ts';
+
+const wealthAtZeroAppreciation = calculateBuyerWealthSnapshot(100000, 80000, 5000, 12, 0);
+assert.equal(wealthAtZeroAppreciation.propertyValue, 100000);
+assert.equal(wealthAtZeroAppreciation.paidOffPercent, 0.2);
+assert.equal(wealthAtZeroAppreciation.paidOffValue, 25000);
+assert.equal(wealthAtZeroAppreciation.buyerNetWorth, 25000);
+
+const wealthWithAppreciation = calculateBuyerWealthSnapshot(100000, 80000, 5000, 12, 10);
+assert.ok(Math.abs(wealthWithAppreciation.propertyValue - 110000) < 0.01);
+assert.ok(Math.abs(wealthWithAppreciation.paidOffValue - 27000) < 0.01);
+assert.ok(Math.abs(wealthWithAppreciation.buyerNetWorth - 35000) < 0.01);
+assert.equal(calculateBuyerWealthSnapshot(100000, 120000, 0, 0, 0).paidOffPercent, 0);
 
 const base = {
   property: 650000,
@@ -30,6 +44,32 @@ const base = {
   monthlyFee: 25,
   firstDue: '2026-09-28',
 };
+
+const wealthSchedule = calculateSchedule({ ...base, property: 100000, down: 20000, months: 10, annualNominalRate: 0, trMonthlyPercent: 0, mipMonthlyPercent: 0, dfiMonthlyPercent: 0, monthlyFee: 0 });
+const wealthProjection = projectBuyerWealth(wealthSchedule.price, wealthSchedule.rows, [0, 10], 5000);
+assert.equal(wealthProjection.length, 10);
+assert.equal(wealthProjection[0].fgtsAvailable, 5000);
+assert.equal(wealthProjection[0].scenarios[0].buyerNetWorth, 33000);
+const expectedPropertyAtMonthTen = 100000 * Math.pow(1.1, 10 / 12);
+assert.ok(Math.abs(wealthProjection.at(-1).scenarios[1].propertyValue - expectedPropertyAtMonthTen) < 0.01);
+assert.ok(Math.abs(wealthProjection.at(-1).scenarios[1].paidOffValue - (expectedPropertyAtMonthTen + 5000)) < 0.01);
+
+const referenceScenario = calculateSchedule({
+  property: 650000,
+  down: 130000,
+  months: 420,
+  annualNominalRate: 11.19,
+  trMonthlyPercent: 0.1687,
+  mipMonthlyPercent: 0.01536,
+  dfiMonthlyPercent: 0.013,
+  monthlyFee: 25,
+  firstDue: '2026-09-28',
+  fgts: { currentBalance: 71533.26, monthlyYieldPercent: 0.4187, extraordinaryAmortization: { monthlyContribution: 2500, annualRaisePercent: 5 } },
+});
+const referenceWealth = projectBuyerWealth(referenceScenario.price, referenceScenario.rows, [5], 0);
+assert.equal(referenceScenario.term, 144);
+assert.equal(referenceScenario.rows.at(-1).balance, 0);
+assert.equal(referenceWealth.at(-1).scenarios[0].paidOffPercent, 1);
 
 assert.equal(TR_API_URL, 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.226/dados/ultimos/1?formato=json');
 assert.deepEqual(parseBcbTrPayload([{ data: '27/08/2026', dataFim: '27/09/2026', valor: '0.1692' }]), {
@@ -318,6 +358,9 @@ assert.ok(Math.abs(compareDoc.portfolio - 92500) < 0.01);
 // Carteira rende taxa mensal composta equivalente à anual
 const compareYield = compareRentVsBuy(compareBase, { ...compareDefaults, horizonMonths: 1, investmentAnnualRealPercent: 12.682503013196977 });
 assert.ok(Math.abs(compareYield.portfolio - (20000 * 1.01 + 7000)) < 1e-6);
+assert.equal(compareYield.rows[0].portfolioOpeningBalance, 20000);
+assert.ok(Math.abs(compareYield.rows[0].portfolioYield - 200) < 1e-6);
+assert.equal(compareYield.rows[0].portfolioNetContributions, 27000);
 
 // FGTS: comprador usa parte na entrada; locatário mantém o saldo; depósitos iguais nos dois cenários
 const compareFgts = compareRentVsBuy(

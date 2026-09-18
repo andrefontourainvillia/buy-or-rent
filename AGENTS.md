@@ -10,7 +10,7 @@ This is a TypeScript/React financing simulator built with Next-compatible Vinext
 - `app/layout.tsx`: document metadata and root layout.
 - `scripts/verify-financing.mjs`: deterministic finance checks.
 - `public/`: static assets such as `favicon.svg` and `og.png`.
-- `.openai/hosting.json`: Sites project binding; preserve its existing project ID.
+- `.github/workflows/deploy-pages.yml`: authoritative GitHub Pages build and publish workflow.
 
 Keep financial logic out of UI components when it can be expressed as a pure function in `app/financing.ts`.
 
@@ -23,14 +23,25 @@ Use pnpm and Node.js 22.13 or newer:
 - `pnpm start`: serve the production build locally.
 - `pnpm lint`: run ESLint, excluding generated output.
 - `pnpm test:finance`: run SAC/TR calculation assertions.
+- `pnpm test:coverage`: run the finance assertions with coverage thresholds.
 
-Before submitting changes, run `pnpm lint`, `pnpm test:finance`, and `pnpm build`.
+Before submitting changes, run `pnpm lint`, `pnpm test:finance`, `pnpm test:coverage`, and `pnpm build`.
 
 ## Coding Style & Naming Conventions
 
 Follow the existing TypeScript style: two-space indentation, single quotes, semicolons, and strict typing. Use `PascalCase` for React components and types, `camelCase` for functions and state, and `UPPER_SNAKE_CASE` for fixed external constants such as `TR_API_URL`. Prefer `import type` for type-only imports. Keep UI copy in Brazilian Portuguese and monetary formatting in `pt-BR`/BRL.
 
 ESLint is the source of truth for static style checks. Avoid editing generated directories such as `.next/` and `dist/`.
+
+## Domain and Deployment Pitfalls
+
+- `app/financing.ts` also owns TR payload validation and fallback behavior, FGTS and extra-amortization rules, and buy-versus-rent projections. Preserve the existing operation order: boleto, monthly extra amortization, then FGTS amortization.
+- TR, insurance, and FGTS rates are percentages at the input boundary and decimals inside calculations. Keep this convention consistent.
+- Schedule values retain decimal precision internally and are rounded mainly for display/export. Financial assertions generally allow a maximum difference of R$ 0.01 and must not depend on live network access.
+- `TR_FALLBACK` is the local reference used when the BCB request fails or returns an invalid payload; update it deliberately when its reference date becomes stale.
+- `app/asset-path.ts` must be used for public asset URLs because deployment sets `NEXT_PUBLIC_BASE_PATH`. New files in `public/` must also be added to the explicit copy list in `.github/workflows/deploy-pages.yml`.
+- Do not edit or commit `.next/`, `.vinext/`, `dist/`, `coverage/`, or `node_modules/`; they are generated or local-only.
+- The chart in `app/page.tsx` is browser-only canvas rendering, and CSV export uses semicolon delimiters, comma decimals, and a UTF-8 BOM.
 
 ## Testing Guidelines
 

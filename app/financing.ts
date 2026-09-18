@@ -42,6 +42,23 @@ export type ScheduleRow = {
   cumulativeExtraAmortization: number;
 };
 
+export type BuyerWealthSnapshot = {
+  propertyValue: number;
+  paidOffPercent: number;
+  paidOffValue: number;
+  buyerNetWorth: number;
+};
+
+export type BuyerWealthScenario = BuyerWealthSnapshot & {
+  appreciationAnnualPercent: number;
+};
+
+export type BuyerWealthRow = {
+  n: number;
+  fgtsAvailable: number;
+  scenarios: BuyerWealthScenario[];
+};
+
 export type FgtsExtraordinaryAmortization = {
   monthlyContribution: number;
   annualRaisePercent: number;
@@ -119,6 +136,44 @@ export const clampFgtsToEntry = (entry: number, fgtsCurrentBalance: number) =>
 export const annualToMonthlyRate = (annualPercent: number) =>
   Math.pow(Math.max(0, 1 + annualPercent / 100), 1 / 12) - 1;
 
+export const calculateBuyerWealthSnapshot = (
+  property: number,
+  debtBalance: number,
+  fgtsAvailable: number,
+  elapsedMonths: number,
+  appreciationAnnualPercent: number,
+): BuyerWealthSnapshot => {
+  const price = Math.max(0, property);
+  const debt = Math.max(0, debtBalance);
+  const fgts = Math.max(0, fgtsAvailable);
+  const appreciationFactor = Math.pow(Math.max(0, 1 + appreciationAnnualPercent / 100), Math.max(0, elapsedMonths) / 12);
+  const propertyValue = price * appreciationFactor;
+  const paidOffPercent = price > 0 ? clamp((price - debt) / price, 0, 1) : 0;
+  return {
+    propertyValue,
+    paidOffPercent,
+    paidOffValue: propertyValue * paidOffPercent + fgts,
+    buyerNetWorth: propertyValue - debt + fgts,
+  };
+};
+
+export const projectBuyerWealth = (
+  property: number,
+  rows: ScheduleRow[],
+  appreciationScenariosAnnualPercent: number[],
+  initialFgtsAvailable = 0,
+): BuyerWealthRow[] => rows.map((row) => {
+  const fgtsAvailable = Math.max(0, initialFgtsAvailable) + Math.max(0, row.fgtsBalance);
+  return {
+    n: row.n,
+    fgtsAvailable,
+    scenarios: appreciationScenariosAnnualPercent.map((appreciationAnnualPercent) => ({
+      appreciationAnnualPercent,
+      ...calculateBuyerWealthSnapshot(property, row.balance, fgtsAvailable, row.n, appreciationAnnualPercent),
+    })),
+  };
+});
+
 export const composeRealAndInflation = (realAnnualPercent: number, ipcaAnnualPercent: number) =>
   ((1 + realAnnualPercent / 100) * (1 + ipcaAnnualPercent / 100) - 1) * 100;
 
@@ -140,6 +195,9 @@ export type RentVsBuyRow = {
   rent: number;
   buyerOutlay: number;
   investedDifference: number;
+  portfolioOpeningBalance: number;
+  portfolioYield: number;
+  portfolioNetContributions: number;
   portfolio: number;
   buyerFgts: number;
   renterFgts: number;
@@ -353,6 +411,7 @@ export function compareRentVsBuy(financing: FinancingInputs, comparison: RentVsB
   const initialPortfolio = schedule.entry - fgtsEntryPortion + documentationCosts;
 
   let portfolio = initialPortfolio;
+  let portfolioNetContributions = initialPortfolio;
   let buyerFgts = Math.max(0, (financing.fgts?.currentBalance ?? 0) - fgtsEntryPortion);
   let renterFgts = Math.max(0, financing.fgts?.currentBalance ?? 0);
   let totalRentPaid = 0;
@@ -366,7 +425,10 @@ export function compareRentVsBuy(financing: FinancingInputs, comparison: RentVsB
     const scheduleRow = schedule.rows[month - 1];
     const buyerOutlay = scheduleRow ? scheduleRow.total + scheduleRow.extraAmortization : 0;
     const investedDifference = buyerOutlay - rent;
-    portfolio = portfolio * (1 + investmentMonthlyRate) + investedDifference;
+    const portfolioOpeningBalance = portfolio;
+    const portfolioYield = portfolioOpeningBalance * investmentMonthlyRate;
+    portfolio = portfolioOpeningBalance + portfolioYield + investedDifference;
+    portfolioNetContributions += investedDifference;
     const contribution = Math.max(0, comparison.fgtsMonthlyContribution)
       * Math.pow(1 + Math.max(0, comparison.fgtsAnnualRaisePercent) / 100, elapsedYears);
     buyerFgts = Math.max(0, buyerFgts * (1 + fgtsMonthlyRate) + contribution - (scheduleRow?.fgtsAmortization ?? 0));
@@ -378,6 +440,9 @@ export function compareRentVsBuy(financing: FinancingInputs, comparison: RentVsB
       rent,
       buyerOutlay,
       investedDifference,
+      portfolioOpeningBalance,
+      portfolioYield,
+      portfolioNetContributions,
       portfolio,
       buyerFgts,
       renterFgts,
@@ -391,8 +456,8 @@ export function compareRentVsBuy(financing: FinancingInputs, comparison: RentVsB
   const renterNetWorth = portfolio + renterFgts;
   const years = horizonMonths / 12;
   const scenarios = comparison.appreciationScenariosAnnualPercent.map((appreciationAnnualPercent) => {
-    const propertyValue = schedule.price * Math.pow(Math.max(0, 1 + appreciationAnnualPercent / 100), years);
-    const buyerNetWorth = propertyValue - residualDebt + buyerFgtsLeftover;
+    const wealth = calculateBuyerWealthSnapshot(schedule.price, debtBalance, buyerFgts, horizonMonths, appreciationAnnualPercent);
+    const { propertyValue, buyerNetWorth } = wealth;
     return { appreciationAnnualPercent, propertyValue, buyerNetWorth, advantage: buyerNetWorth - renterNetWorth };
   });
   const requiredPropertyValue = renterNetWorth + residualDebt - buyerFgtsLeftover;

@@ -545,8 +545,44 @@ h1 em {
     font-weight: 700
 }
 
+.wealth-summary {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, .1)
+}
+
+.wealth-summary>.help-label {
+    color: #9fb3c1;
+    font-size: 10px
+}
+
+.wealth-summary-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin: 8px 0;
+    color: #cddbe3;
+    font-size: 11px
+}
+
+.wealth-summary-row {
+    display: grid;
+    grid-template-columns: .7fr 1.5fr 1.5fr 1.4fr;
+    gap: 8px;
+    padding: 9px 0;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+    color: #cddbe3;
+    font-size: 10px
+}
+
+.wealth-summary-row strong {
+    color: #fff;
+    text-align: right
+}
+
 .legend {
     display: flex;
+    flex-wrap: wrap;
     gap: 18px;
     margin-top: 17px;
     color: #a9bdc6;
@@ -571,6 +607,18 @@ h1 em {
 
 .legend .blue {
     background: var(--blue)
+}
+
+.legend .conservative {
+    background: #63b4d9
+}
+
+.legend .central {
+    background: #56b870
+}
+
+.legend .optimistic {
+    background: #dc6d8b
 }
 
 .chart {
@@ -694,8 +742,123 @@ h1 em {
     cursor: pointer
 }
 
+.purchase-toggle {
+    border-color: #5c97b8;
+    background: #dceef7;
+    color: #075f91
+}
+
+.purchase-toggle[aria-expanded=true] {
+    border-color: #0875b9;
+    background: #9ecbe1;
+    color: #063e60
+}
+
+.purchase-toggle.boleto-toggle {
+    border-color: #5d9fc2;
+    background: #cfe8f4;
+    color: #07527a
+}
+
+.purchase-toggle.fgts-toggle {
+    border-color: #3482ab;
+    background: #b7d9ea;
+    color: #064b70
+}
+
+.purchase-toggle.totals-toggle {
+    border-color: #17688f;
+    background: #93c5dd;
+    color: #043b59
+}
+
+.purchase-toggle.boleto-toggle[aria-expanded=true] {
+    background: #add5e8;
+    color: #063c5a
+}
+
+.purchase-toggle.fgts-toggle[aria-expanded=true] {
+    background: #87c1dc;
+    color: #043750
+}
+
+.purchase-toggle.totals-toggle[aria-expanded=true] {
+    background: #5ea6c9;
+    color: #022d44
+}
+
+.rent-toggle {
+    border-color: #9acdae;
+    background: #eef8f0;
+    color: #236842
+}
+
+.rent-toggle[aria-expanded=true] {
+    border-color: #5ca878;
+    background: #cdebd4;
+    color: #174c30
+}
+
+.portfolio-toggle {
+    border-color: #6eae82;
+    background: #d9efdf;
+    color: #1d5c36
+}
+
+.portfolio-toggle[aria-expanded=true] {
+    border-color: #36774e;
+    background: #aad7b6;
+    color: #123d24
+}
+
+.wealth-toggle {
+    border-color: #e2c56e;
+    background: #fff8e5;
+    color: #806019
+}
+
+.wealth-toggle[aria-expanded=true] {
+    border-color: #c49315;
+    background: #f5d77f;
+    color: #5c4309
+}
+
+.wealth-toggle.conservative {
+    border-color: #e6d59e;
+    background: #fff9eb;
+    color: #806a30
+}
+
+.wealth-toggle.central {
+    border-color: #e2c56e;
+    background: #fff4d5;
+    color: #79550c
+}
+
+.wealth-toggle.optimistic {
+    border-color: #d9af38;
+    background: #ffedb5;
+    color: #684805
+}
+
+.wealth-toggle.conservative[aria-expanded=true] {
+    background: #f6e8ba;
+    color: #69551f
+}
+
+.wealth-toggle.central[aria-expanded=true] {
+    background: #f5d77f;
+    color: #5c4309
+}
+
+.wealth-toggle.optimistic[aria-expanded=true] {
+    background: #edc95f;
+    color: #4f3500
+}
+
 .table-scroll {
-    overflow-x: auto
+    max-height: min(70vh, 720px);
+    overflow: auto
 }
 
 table {
@@ -706,10 +869,14 @@ table {
 }
 
 th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
     text-align: left;
     padding: 12px 14px;
     background: #edf3f4;
-    color: #526976
+    color: #526976;
+    box-shadow: 0 1px 0 #d9e4e7
 }
 
 th>.help-label {
@@ -723,6 +890,120 @@ th .info-tooltip button {
     width: 14px;
     height: 14px;
     font-size: 9px
+}
+
+.is-comparison th:not(.rent-column) {
+    background: #e8f4fa;
+    color: #075f91
+}
+
+.is-comparison td:not(.rent-column) {
+    background: #f6fbfe
+}
+
+.is-comparison .rent-column {
+    background: #eef8f0;
+    color: #236842
+}
+
+.is-comparison .rent-column b {
+    color: #174c30
+}
+
+.is-comparison .rent-column-start {
+    border-left: 2px solid #9acdae
+}
+
+table.is-comparison th.boleto-column {
+    background: #cfe8f4;
+    color: #07527a
+}
+
+table.is-comparison td.boleto-column {
+    background: #e2f2f9;
+    color: #255873
+}
+
+table.is-comparison th.fgts-column {
+    background: #b7d9ea;
+    color: #064b70
+}
+
+table.is-comparison td.fgts-column {
+    background: #d3ebf6;
+    color: #1d536f
+}
+
+table.is-comparison th.totals-column {
+    background: #93c5dd;
+    color: #043b59
+}
+
+table.is-comparison td.totals-column {
+    background: #bddfeb;
+    color: #124562
+}
+
+table.is-comparison td.totals-column b {
+    color: #022d44
+}
+
+.is-comparison th.rent-column.portfolio-detail-column {
+    background: #d9efdf;
+    color: #1d5c36
+}
+
+.is-comparison td.rent-column.portfolio-detail-column {
+    background: #e9f6ed;
+    color: #235c39
+}
+
+table.is-wealth th.wealth-column {
+    background: #fff3cf;
+    color: #79550c
+}
+
+table.is-wealth td.wealth-column {
+    background: #fffaf0;
+    color: #725b24
+}
+
+table.is-wealth .wealth-column b {
+    color: #5e470f
+}
+
+table.is-wealth .wealth-column-start {
+    border-left: 2px solid #e2c56e
+}
+
+table.is-wealth th.wealth-column.wealth-conservative {
+    background: #fff8e6;
+    color: #806a30
+}
+
+table.is-wealth td.wealth-column.wealth-conservative {
+    background: #fffdf6;
+    color: #766237
+}
+
+table.is-wealth th.wealth-column.wealth-central {
+    background: #fff0c4;
+    color: #79550c
+}
+
+table.is-wealth td.wealth-column.wealth-central {
+    background: #fff9e8;
+    color: #725b24
+}
+
+table.is-wealth th.wealth-column.wealth-optimistic {
+    background: #ffe4a0;
+    color: #684805
+}
+
+table.is-wealth td.wealth-column.wealth-optimistic {
+    background: #fff4d4;
+    color: #604b19
 }
 
 td {
@@ -848,6 +1129,15 @@ footer .mark {
 
     .primary-result strong {
         font-size: 32px
+    }
+
+    .wealth-summary-row {
+        grid-template-columns: 1fr;
+        gap: 4px
+    }
+
+    .wealth-summary-row strong {
+        text-align: left
     }
 
     .details-head {
