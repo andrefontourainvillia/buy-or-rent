@@ -722,14 +722,45 @@ h1 em {
     font-size: 10px
 }
 
-.table-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap
+.table-controls-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    justify-content: stretch;
+    gap: 18px
+}
+
+.table-controls-toolbar .table-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+    align-items: start;
+    gap: 16px
+}
+
+.table-action-group {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0
+}
+
+.table-action-group legend {
+    margin-bottom: 7px;
+    color: #71838e;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase
+}
+
+.table-action-buttons {
+    display: grid;
+    gap: 8px
 }
 
 .detail-toggle {
+    width: 100%;
     min-height: 38px;
     padding: 0 13px;
     border: 1px solid #b8d5e2;
@@ -761,6 +792,7 @@ h1 em {
 }
 
 .purchase-toggle.fgts-toggle {
+    justify-content: center;
     border-color: #3482ab;
     background: #b7d9ea;
     color: #064b70
@@ -914,37 +946,37 @@ th .info-tooltip button {
     border-left: 2px solid #9acdae
 }
 
-table.is-comparison th.boleto-column {
+table th.boleto-column {
     background: #cfe8f4;
     color: #07527a
 }
 
-table.is-comparison td.boleto-column {
+table td.boleto-column {
     background: #e2f2f9;
     color: #255873
 }
 
-table.is-comparison th.fgts-column {
+table th.fgts-column {
     background: #b7d9ea;
     color: #064b70
 }
 
-table.is-comparison td.fgts-column {
+table td.fgts-column {
     background: #d3ebf6;
     color: #1d536f
 }
 
-table.is-comparison th.totals-column {
+table th.totals-column {
     background: #93c5dd;
     color: #043b59
 }
 
-table.is-comparison td.totals-column {
+table td.totals-column {
     background: #bddfeb;
     color: #124562
 }
 
-table.is-comparison td.totals-column b {
+table td.totals-column b {
     color: #022d44
 }
 

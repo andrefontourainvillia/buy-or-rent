@@ -509,64 +509,77 @@ export default function Home() {
         {extraAmortizationEnabled && <Metric label="Amortização extra mensal" value={fmt(result.totals.extraAmortization)} help={resultHelp.extraAmortizationTotal} />}
       </div>
       <div className="table-card">
-        <div className="table-toolbar">
-          <div>
+        <div className="table-toolbar table-controls-toolbar">
+          <div className="table-toolbar-summary">
             <strong>{result.term} parcelas exibidas</strong>
             <span>Use os ícones de informação para entender cada cálculo.</span>
           </div>
           <div className="table-actions">
-            <button
-              className="detail-toggle purchase-toggle boleto-toggle"
-              onClick={() => setShowTableDetails((visible) => !visible)}
-              aria-expanded={showTableDetails}
-            >
-              {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
-            </button>
-            {fgtsAmortizationActive && (
-              <button
-                className="detail-toggle purchase-toggle fgts-toggle"
-                onClick={() => setShowFgtsDetails((visible) => !visible)}
-                aria-expanded={showFgtsDetails}
-              >
-                {showFgtsDetails ? 'Ocultar detalhes do FGTS' : 'Exibir detalhes do FGTS'}
-              </button>
-            )}
-            <button
-              className="detail-toggle purchase-toggle totals-toggle"
-              onClick={() => setShowTotals((visible) => !visible)}
-              aria-expanded={showTotals}
-            >
-              {showTotals ? 'Ocultar totalizadores' : 'Exibir totalizadores'}
-            </button>
-            <button className="detail-toggle wealth-toggle conservative" onClick={() => setShowConservativeWealth((visible) => !visible)} aria-expanded={showConservativeWealth}>
-              Análise conservadora ({number.format(scenarioConservative)}% a.a.)
-            </button>
-            <button className="detail-toggle wealth-toggle central" onClick={() => setShowCentralWealth((visible) => !visible)} aria-expanded={showCentralWealth}>
-              Análise central ({number.format(scenarioCentral)}% a.a.)
-            </button>
-            <button className="detail-toggle wealth-toggle optimistic" onClick={() => setShowOptimisticWealth((visible) => !visible)} aria-expanded={showOptimisticWealth}>
-              Análise otimista ({number.format(scenarioOptimistic)}% a.a.)
-            </button>
+            <fieldset className="table-action-group">
+              <legend>Financiamento</legend>
+              <div className="table-action-buttons">
+                <button
+                  className="detail-toggle purchase-toggle boleto-toggle"
+                  onClick={() => setShowTableDetails((visible) => !visible)}
+                  aria-expanded={showTableDetails}
+                >
+                  {showTableDetails ? 'Ocultar detalhes do boleto' : 'Exibir detalhes do boleto'}
+                </button>
+                {fgtsAmortizationActive && (
+                  <button
+                    className="detail-toggle purchase-toggle fgts-toggle"
+                    onClick={() => setShowFgtsDetails((visible) => !visible)}
+                    aria-expanded={showFgtsDetails}
+                  >
+                    {showFgtsDetails ? 'Ocultar detalhes do FGTS' : 'Exibir detalhes do FGTS'}
+                  </button>
+                )}
+                <button
+                  className="detail-toggle purchase-toggle totals-toggle"
+                  onClick={() => setShowTotals((visible) => !visible)}
+                  aria-expanded={showTotals}
+                >
+                  {showTotals ? 'Ocultar totalizadores' : 'Exibir totalizadores'}
+                </button>
+              </div>
+            </fieldset>
+            <fieldset className="table-action-group">
+              <legend>Patrimônio</legend>
+              <div className="table-action-buttons">
+                <button className="detail-toggle wealth-toggle conservative" onClick={() => setShowConservativeWealth((visible) => !visible)} aria-expanded={showConservativeWealth}>
+                  Análise conservadora ({number.format(scenarioConservative)}% a.a.)
+                </button>
+                <button className="detail-toggle wealth-toggle central" onClick={() => setShowCentralWealth((visible) => !visible)} aria-expanded={showCentralWealth}>
+                  Análise central ({number.format(scenarioCentral)}% a.a.)
+                </button>
+                <button className="detail-toggle wealth-toggle optimistic" onClick={() => setShowOptimisticWealth((visible) => !visible)} aria-expanded={showOptimisticWealth}>
+                  Análise otimista ({number.format(scenarioOptimistic)}% a.a.)
+                </button>
+              </div>
+            </fieldset>
             {rentComparisonEnabled && (
-              <button
-                className="detail-toggle rent-toggle"
-                onClick={() => setShowRentDetails((visible) => !visible)}
-                aria-expanded={showRentDetails}
-              >
-                {showRentDetails ? 'Ocultar comparação com aluguel' : 'Exibir comparação com aluguel'}
-              </button>
-            )}
-            {rentComparisonEnabled && (
-              <button
-                className="detail-toggle portfolio-toggle"
-                onClick={() => {
-                  setShowRentDetails(true);
-                  setShowRenterPortfolioDetails((visible) => !visible);
-                }}
-                aria-expanded={showRenterPortfolioDetails}
-              >
-                {showRenterPortfolioDetails ? 'Ocultar detalhes da carteira' : 'Detalhar carteira do locatário'}
-              </button>
+              <fieldset className="table-action-group">
+                <legend>Comparação</legend>
+                <div className="table-action-buttons">
+                  <button
+                    className="detail-toggle rent-toggle"
+                    onClick={() => setShowRentDetails((visible) => !visible)}
+                    aria-expanded={showRentDetails}
+                  >
+                    {showRentDetails ? 'Ocultar comparação com aluguel' : 'Exibir comparação com aluguel'}
+                  </button>
+                  <button
+                    className="detail-toggle portfolio-toggle"
+                    onClick={() => {
+                      setShowRentDetails(true);
+                      setShowRenterPortfolioDetails((visible) => !visible);
+                    }}
+                    aria-expanded={showRenterPortfolioDetails}
+                  >
+                    {showRenterPortfolioDetails ? 'Ocultar detalhes da carteira' : 'Detalhar carteira do locatário'}
+                  </button>
+                </div>
+              </fieldset>
             )}
           </div>
         </div>
